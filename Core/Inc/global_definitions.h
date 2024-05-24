@@ -1,0 +1,2 @@
+
+#define LTC6820_CS GPIOA, GPIO_PIN_15

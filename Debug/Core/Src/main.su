@@ -1,0 +1,14 @@
+../Core/Src/main.c:101:10:vcu_adc_read_millivolts	64	static
+../Core/Src/main.c:134:9:current_sense_voltage_to_current	24	static
+../Core/Src/main.c:144:6:reset_SOC	4	static
+../Core/Src/main.c:153:6:update_SOC	56	static
+../Core/Src/main.c:171:8:calc_temp	40	static
+../Core/Src/main.c:191:5:main	184	static
+../Core/Src/main.c:310:6:SystemClock_Config	88	static
+../Core/Src/main.c:358:13:MX_ADC1_Init	56	static
+../Core/Src/main.c:426:13:MX_FDCAN1_Init	8	static
+../Core/Src/main.c:469:13:MX_FDCAN2_Init	8	static
+../Core/Src/main.c:512:13:MX_RTC_Init	32	static
+../Core/Src/main.c:578:13:MX_SPI3_Init	8	static
+../Core/Src/main.c:618:13:MX_GPIO_Init	40	static
+../Core/Src/main.c:661:6:Error_Handler	4	static,ignoring_inline_asm
