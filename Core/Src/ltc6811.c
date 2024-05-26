@@ -4,6 +4,7 @@
 #include <inttypes.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <math.h>
 
 
 int16_t pec15Table[256];
@@ -365,7 +366,7 @@ void generate_i2c(uint8_t * comm_reg, uint8_t *comm_data, uint8_t len)
 }
 
 
-void send_comm(ltc6811 *ltc6811, uint8_t * i2c_message, uint8_t len) {
+void send_comm(ltc6811 slave, uint8_t *i2c_message, uint8_t len) {
 
     uint8_t comm_reg[6];
 
@@ -373,7 +374,7 @@ void send_comm(ltc6811 *ltc6811, uint8_t * i2c_message, uint8_t len) {
 
     wake_sleep();
 
-    address_write(ltc6811[0].address, WRCOMM, comm_reg);
+    address_write(slave.address, WRCOMM, comm_reg);
 
     broadcast_command_stcomm(STCOMM);
 
@@ -410,5 +411,85 @@ wake_standby();
 HAL_GPIO_WritePin(LTC6820_CS, GPIO_PIN_RESET);
 HAL_SPI_Transmit(&hspi3, tx_msg, 13, 1000);
 HAL_GPIO_WritePin(LTC6820_CS, GPIO_PIN_SET);
+}
+
+
+double calc_temp(double adc_voltage) {
+  double steinhart;
+  double resistance = 10000 * adc_voltage / (3 - adc_voltage);
+  steinhart = resistance / 10000;     // (R/Ro)
+  steinhart = log(steinhart);                  // ln(R/Ro)
+  steinhart /= 3950;                   // 1/B * ln(R/Ro)
+  steinhart += 1.0 / (25 + 273.15); // + (1/To)
+  steinhart = 1.0 / steinhart;                 // Invert
+  steinhart -= 273.15;
+
+  return steinhart;
+}
+
+
+void read_all_temps(ltc6811 *ltc6811_arr, uint8_t mux_channels, int slave_num)
+{
+	double thermistor_temp;
+	double thermistor_voltage;
+	for(int slave = 0; slave < slave_num; slave++)
+	{
+		ltc6811 selected_slave = ltc6811_arr[slave]; //increment over all slaves
+
+		uint8_t i2c_data[2] = {0b10010000, 0b00001000};	//bits 4 - 7 are address bits for the mux IC, bits 11 - 15 are the address bits for the mux channel, start with channel 0
+		for (int i = 0;  i < mux_channels; i++)
+		{
+
+
+		  send_comm(selected_slave, i2c_data, 2);
+
+		  i2c_data[1]++;
+
+		  broadcast_command(ADAX(MD_27k_14k, CHG_GPIO_1)); //measure gpio 1 (mux output)
+
+		  //DELAY?
+
+		  address_read(selected_slave.address, RDAUXA, selected_slave.auxa_reg); //read auxa_reg where adc value was stored
+
+		  thermistor_voltage = ((selected_slave.auxa_reg[1] << 8) | selected_slave.auxa_reg[0]) * 0.0001;
+
+		  thermistor_temp = calc_temp(thermistor_voltage); //convert voltage to temperature in degrees celcius
+
+		  if(thermistor_temp > 60) //if overtemp, trigger shutdown
+		  {
+			  return; //ADD SDC
+		  }
+
+
+		}
+
+		  broadcast_command(ADAX(MD_27k_14k, CHG_GPIO_2)); //measure gpio 2 (non mux'd thermistor)
+
+		  address_read(selected_slave.address, RDAUXA, selected_slave.auxa_reg);
+
+		  thermistor_voltage = ((selected_slave.auxa_reg[3] << 8) | selected_slave.auxa_reg[2]) * 0.0001;
+
+		  thermistor_temp = calc_temp(thermistor_voltage); //convert voltage to temperature in degrees celcius
+
+		  if(thermistor_temp > 60) //if overtemp, trigger shutdown
+		  {
+			  return; //ADD SDC
+		  }
+
+		  broadcast_command(ADAX(MD_27k_14k, CHG_GPIO_3)); //measure gpio 3 (non mux'd thermistor)
+
+		  address_read(selected_slave.address, RDAUXA, selected_slave.auxa_reg);
+
+		  thermistor_voltage = ((selected_slave.auxa_reg[5] << 8) | selected_slave.auxa_reg[4]) * 0.0001;
+
+		  thermistor_temp = calc_temp(thermistor_voltage); //convert voltage to temperature in degrees celcius
+
+		  if(thermistor_temp > 60) //if overtemp, trigger shutdown
+		  {
+			  return; //ADD SDC
+		  }
+	}
+
+
 }
 

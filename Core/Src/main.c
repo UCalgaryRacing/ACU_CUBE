@@ -27,7 +27,7 @@
 #include <inttypes.h>
 #include <stddef.h>
 #include <stdint.h>
-#include <math.h>
+
 
 /* USER CODE END Includes */
 
@@ -44,12 +44,11 @@
 #define NUM_OF_CELLS 12
 #define EVEN_SLAVE_CELLS 12
 #define ODD_SLAVE_CELLS 12
+#define NUM_OF_MUX_CHANNELS 8
 
-
-#define BATTERY_CAPCITY 1000
+#define BATTERY_CAPCITY 10000
 #define CURRENT_SENSE_RATIO 12.5 //12.5mv / A
-#define CURRENT_SENSE_OFFSET 2.5 //at 0A, current sensor voltage is 2.5V
-
+#define CURRENT_SENSE_OFFSET 2500 //at 0A, current sensor voltage is 2.5V
 
 
 
@@ -62,6 +61,7 @@
 
 /* Private variables ---------------------------------------------------------*/
 ADC_HandleTypeDef hadc1;
+DMA_HandleTypeDef hdma_adc1;
 
 FDCAN_HandleTypeDef hfdcan1;
 FDCAN_HandleTypeDef hfdcan2;
@@ -75,13 +75,17 @@ SPI_HandleTypeDef hspi3;
 
 double SOC; //state of charge, value between 0-100 representing charge
 uint64_t last_SOC_update_ms; //last time SOC was updated, measured in ms since boot
-uint8_t buffer[1];
+uint16_t adc_val[1];
+double current_sense_voltage;
+double current;
+int64_t time_since_last_update;
 
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
+static void MX_DMA_Init(void);
 static void MX_RTC_Init(void);
 static void MX_FDCAN1_Init(void);
 static void MX_FDCAN2_Init(void);
@@ -93,8 +97,6 @@ static void MX_ADC1_Init(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-
-
 
 
 //NEED TO UPDATE TO HAL
@@ -143,6 +145,7 @@ return (current_sense_voltage - CURRENT_SENSE_OFFSET) / CURRENT_SENSE_RATIO * -1
 //use lookup table / formula to measure pack voltage and estimate SOC
 void reset_SOC()
 {
+last_SOC_update_ms = HAL_GetTick();
 SOC = 100;
 }
 
@@ -153,32 +156,18 @@ SOC = 100;
 void update_SOC ()
 {
 
-double current_sense_voltage = vcu_adc_read_millivolts(&hadc1, ADC_CHANNEL_4);
-double current = current_sense_voltage_to_current(current_sense_voltage);
-
+//double current_sense_voltage = vcu_adc_read_millivolts(&hadc1, ADC_CHANNEL_4);
+current_sense_voltage = adc_val[0] * 2500 / 4096;
+current = current_sense_voltage_to_current(current_sense_voltage);
 
 uint64_t current_ms = HAL_GetTick();
 
-int64_t time_since_last_update = current_ms - last_SOC_update_ms;
+time_since_last_update = current_ms - last_SOC_update_ms;
 
 last_SOC_update_ms = current_ms;
 
+SOC -= current * time_since_last_update / BATTERY_CAPCITY;
 
-SOC += current * time_since_last_update / BATTERY_CAPCITY;
-
-}
-
-double calc_temp(double adc_voltage) {
-  double steinhart;
-  double resistance = 10000 * adc_voltage / (3 - adc_voltage);
-  steinhart = resistance / 10000;     // (R/Ro)
-  steinhart = log(steinhart);                  // ln(R/Ro)
-  steinhart /= 3950;                   // 1/B * ln(R/Ro)
-  steinhart += 1.0 / (25 + 273.15); // + (1/To)
-  steinhart = 1.0 / steinhart;                 // Invert
-  steinhart -= 273.15;
-
-  return steinhart;
 }
 
 
@@ -212,6 +201,7 @@ int main(void)
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
+  MX_DMA_Init();
   MX_RTC_Init();
   MX_FDCAN1_Init();
   MX_FDCAN2_Init();
@@ -220,6 +210,8 @@ int main(void)
   /* USER CODE BEGIN 2 */
 
   HAL_ADCEx_Calibration_Start(&hadc1, ADC_SINGLE_ENDED);
+  HAL_ADC_Start_DMA (&hadc1, (uint32_t*)adc_val, 1);
+  HAL_ADC_Start(&hadc1);
 
   HAL_Delay(100); // 100ms should allow all relevant power circuitry to stabilize
 
@@ -250,6 +242,8 @@ int main(void)
       ltc6811[i].cell_count = (i % 2 == 0) ? EVEN_SLAVE_CELLS : ODD_SLAVE_CELLS;
   }
 
+  reset_SOC();
+
 
   /* USER CODE END 2 */
 
@@ -272,29 +266,14 @@ int main(void)
       // calculate actual voltage values
       extract_all_voltages(ltc6811, cell_voltage, NUM_OF_SLAVES);
 
-
 	  wake_sleep(); // wake LTC6811 from sleep
 
+	  read_all_temps(ltc6811, NUM_OF_MUX_CHANNELS, NUM_OF_SLAVES);
+
+	  update_SOC();
 
 
-	  vcu_adc_read_millivolts(&hadc1, ADC_CHANNEL_4);
-
-
-	  uint8_t i2c_data[2] = {0b10010000, 0b00001111};
-
-	  send_comm(ltc6811, i2c_data, 2);
-
-	  broadcast_command(ADAX(MD_27k_14k, CHG_ALL));
-
-	  HAL_Delay(2);
-
-	  address_read(ltc6811[0].address, RDAUXA, ltc6811[0].auxa_reg);
-
-	  double adc1 = ((ltc6811[0].auxa_reg[1] << 8) | ltc6811[0].auxa_reg[0]) * 0.0001;
-
-	  double real_temp = calc_temp(adc1);
-
-	  HAL_Delay(1000);
+	  //HAL_Delay(1000);
 
     /* USER CODE END WHILE */
 
@@ -379,12 +358,12 @@ static void MX_ADC1_Init(void)
   hadc1.Init.ScanConvMode = ADC_SCAN_DISABLE;
   hadc1.Init.EOCSelection = ADC_EOC_SINGLE_CONV;
   hadc1.Init.LowPowerAutoWait = DISABLE;
-  hadc1.Init.ContinuousConvMode = DISABLE;
+  hadc1.Init.ContinuousConvMode = ENABLE;
   hadc1.Init.NbrOfConversion = 1;
   hadc1.Init.DiscontinuousConvMode = DISABLE;
   hadc1.Init.ExternalTrigConv = ADC_SOFTWARE_START;
   hadc1.Init.ExternalTrigConvEdge = ADC_EXTERNALTRIGCONVEDGE_NONE;
-  hadc1.Init.DMAContinuousRequests = DISABLE;
+  hadc1.Init.DMAContinuousRequests = ENABLE;
   hadc1.Init.Overrun = ADC_OVR_DATA_OVERWRITTEN;
   hadc1.Init.OversamplingMode = DISABLE;
   if (HAL_ADC_Init(&hadc1) != HAL_OK)
@@ -611,6 +590,23 @@ static void MX_SPI3_Init(void)
 }
 
 /**
+  * Enable DMA controller clock
+  */
+static void MX_DMA_Init(void)
+{
+
+  /* DMA controller clock enable */
+  __HAL_RCC_DMAMUX1_CLK_ENABLE();
+  __HAL_RCC_DMA1_CLK_ENABLE();
+
+  /* DMA interrupt init */
+  /* DMA1_Channel1_IRQn interrupt configuration */
+  HAL_NVIC_SetPriority(DMA1_Channel1_IRQn, 0, 0);
+  HAL_NVIC_EnableIRQ(DMA1_Channel1_IRQn);
+
+}
+
+/**
   * @brief GPIO Initialization Function
   * @param None
   * @retval None
@@ -651,6 +647,11 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
+
+//void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef* hadc)
+//{
+//   __NOP();
+//}
 
 /* USER CODE END 4 */
 

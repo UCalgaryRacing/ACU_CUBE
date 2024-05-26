@@ -175,10 +175,13 @@ void read_all_voltages(ltc6811 *ltc6811, int slave_num);
 
 void generate_i2c(uint8_t * comm_reg, uint8_t *comm_data, uint8_t len);
 
-void send_comm(ltc6811 *ltc6811, uint8_t * i2c_message, uint8_t len);
+void send_comm(ltc6811 slave, uint8_t * i2c_message, uint8_t len);
 
 void broadcast_command_stcomm(uint16_t command_code);
 
+double calc_temp(double adc_value);
+
+void read_all_temps(ltc6811 *ltc6811, uint8_t mux_channels, int slave_num);
 
 
 
