@@ -41,10 +41,13 @@
 
 
 #define NUM_OF_SLAVES 1
-#define NUM_OF_CELLS 12
-#define EVEN_SLAVE_CELLS 12
-#define ODD_SLAVE_CELLS 12
+#define NUM_OF_CELLS 6
+#define EVEN_SLAVE_CELLS 6 //12
+#define ODD_SLAVE_CELLS 6 //11
 #define NUM_OF_MUX_CHANNELS 8
+#define NUM_OF_THERMISTORS (NUM_OF_SLAVES * 36)
+#define MOVING_AVERAGE_SAMPLES 10 //number of samples to take exponential moving average over
+#define VOLTAGE_SAG_PERCENT_TOLERANCE 10 //percentage cells are allowed to deviate from moving average without being considered fusable link pop
 
 #define BATTERY_CAPCITY 10000
 #define CURRENT_SENSE_RATIO 12.5 //12.5mv / A
@@ -80,6 +83,25 @@ double current_sense_voltage;
 double current;
 int64_t time_since_last_update;
 
+float cell_voltage[NUM_OF_CELLS];      // index 0 = lowest potential
+float cell_voltage_ma[NUM_OF_CELLS];   // index 0 = lowest potential
+ltc6811 ltc6811_arr[NUM_OF_SLAVES]; // index 0 = lowest potential
+float thermistor_temps[NUM_OF_THERMISTORS];
+
+//analog signals being passed to ACU LV for logging on CAN
+double acu_measure;
+double TS_measure;
+
+float voltage_sag_allowed_float = 1 - (float)VOLTAGE_SAG_PERCENT_TOLERANCE / 100.0;
+
+
+int fuse_pop; //FOR TESTING
+int AMS_OK = 0; //digital signal controlling AMS relay (OUTPUT)
+int IMD_OK; //digital signal reading IMD fault status (INPUT)
+int IMD_M; //PWM signal reading IMD measurement (INPUT)
+int RPM_SIGNAL; //PWM signal for reading fan speed (INPUT)
+int PWM_SIGNAL; //0-100 value for fan rpm (OUTPUT)
+
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -97,6 +119,12 @@ static void MX_ADC1_Init(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+
+//FIGURE OUT WHICH BUS IS LOGGING AND WHICH IS COMMANDS
+void send_can1();
+
+
+void send_can2();
 
 
 //NEED TO UPDATE TO HAL
@@ -120,7 +148,6 @@ uint32_t vcu_adc_read_millivolts(ADC_HandleTypeDef* hadc, uint32_t channel)
 	uint16_t adc_val = HAL_ADC_GetValue(hadc);
 
 	HAL_ADC_Stop(hadc);
-
 
 	double val_mv = adc_val * 2500 / 4096;
 
@@ -169,6 +196,31 @@ last_SOC_update_ms = current_ms;
 SOC -= current * time_since_last_update / BATTERY_CAPCITY;
 
 }
+
+void update_moving_average(float *current_avg, float new_sample)
+{
+
+	*current_avg = ((MOVING_AVERAGE_SAMPLES - 1) * *current_avg + new_sample) / MOVING_AVERAGE_SAMPLES;
+}
+
+int check_fusable_link(float ma, float cell_voltage)
+{
+
+	if(cell_voltage < ma * voltage_sag_allowed_float)
+	{
+		return 1; //ADD SDC?
+	}
+	return 0;
+}
+
+void set_moving_average(float *cell_voltage_ma, float *cell_voltage)
+{
+	for (int cell = 0; cell < NUM_OF_CELLS; cell++)
+	{
+		cell_voltage_ma[cell] = cell_voltage[cell];
+	}
+}
+
 
 
 /* USER CODE END 0 */
@@ -231,46 +283,82 @@ int main(void)
   ltc6811_config.dcto = 0;
   update_config(&ltc6811_config);
 
-  float cell_voltage[NUM_OF_CELLS];      // index 0 = lowest potential
-  float cell_voltage_ma[NUM_OF_CELLS];   // index 0 = lowest potential
-  struct ltc6811 ltc6811[NUM_OF_SLAVES]; // index 0 = lowest potential
 
   // configure LTC6811 structs to match real life setup
   for (int i = 0; i < NUM_OF_SLAVES; i++)
   {
-      ltc6811[i].address = i;
-      ltc6811[i].cell_count = (i % 2 == 0) ? EVEN_SLAVE_CELLS : ODD_SLAVE_CELLS;
+      ltc6811_arr[i].address = i;
+      ltc6811_arr[i].cell_count = (i % 2 == 0) ? EVEN_SLAVE_CELLS : ODD_SLAVE_CELLS;
   }
 
   reset_SOC();
-
+  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_2, GPIO_PIN_RESET);	//set AMS_OK
 
   /* USER CODE END 2 */
+
+  wake_sleep(); // wake LTC6811 from sleep
+  // send command to read cell voltages
+  broadcast_command(ADCV(MD_27k_14k, DCP_NOT_PERMITTED, CH_ALL));
+
+  HAL_Delay(1); // reading all cell voltages @ "26Hz" should take 210ms
+
+  // read cell voltage registers from all slaves on the bus
+  read_all_voltages(ltc6811_arr, NUM_OF_SLAVES);
+
+
+  // calculate actual voltage values
+  extract_all_voltages(ltc6811_arr, cell_voltage, NUM_OF_SLAVES);
+
+  set_moving_average(cell_voltage_ma, cell_voltage);
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
   while (1)
   {
-      HAL_Delay(100);
-
       wake_sleep(); // wake LTC6811 from sleep
-
       // send command to read cell voltages
-      broadcast_command(ADCV(MD_26_2k, DCP_NOT_PERMITTED, CH_ALL));
+      broadcast_command(ADCV(MD_27k_14k, DCP_NOT_PERMITTED, CH_ALL));
 
-      HAL_Delay(220); // reading all cell voltages @ "26Hz" should take 210ms
+      HAL_Delay(1); // reading all cell voltages @ "27kHz" should take 1ms
 
       // read cell voltage registers from all slaves on the bus
-      read_all_voltages(ltc6811, NUM_OF_SLAVES);
+      read_all_voltages(ltc6811_arr, NUM_OF_SLAVES);
 
       // calculate actual voltage values
-      extract_all_voltages(ltc6811, cell_voltage, NUM_OF_SLAVES);
+      extract_all_voltages(ltc6811_arr, cell_voltage, NUM_OF_SLAVES);
+      float sum_voltage = 0;
+      for(int i = 0; i < NUM_OF_CELLS; i++)
+      {
+      update_moving_average(&cell_voltage_ma[i], cell_voltage[i]);
+      sum_voltage += cell_voltage_ma[i];
+      }
+      float average_voltage = sum_voltage / NUM_OF_CELLS;
 
-	  wake_sleep(); // wake LTC6811 from sleep
+      for(int i = 0; i < NUM_OF_CELLS; i++)
+      {
+      if(check_fusable_link(average_voltage, cell_voltage[i]))
+      {
+    	  fuse_pop = 1;
+      }
+      }
 
-	  read_all_temps(ltc6811, NUM_OF_MUX_CHANNELS, NUM_OF_SLAVES);
 
-	  update_SOC();
+	  if(read_all_temps(ltc6811_arr, thermistor_temps, NUM_OF_MUX_CHANNELS, NUM_OF_SLAVES)) //0 = no fault, 1 = fault
+	  {
+		  AMS_OK = 1;
+	  }
+
+	  if (AMS_OK || fuse_pop)
+	  {
+		  //HAL_GPIO_WritePin(GPIOA, GPIO_PIN_2, GPIO_PIN_SET);
+		  HAL_GPIO_TogglePin(GPIOA, GPIO_PIN_2);
+
+//		  HAL_Delay(100);
+	  }
+
+//	  update_SOC();
+
+
 
 
 	  //HAL_Delay(1000);
@@ -623,10 +711,17 @@ static void MX_GPIO_Init(void)
   __HAL_RCC_GPIOC_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_14|GPIO_PIN_15, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_2|GPIO_PIN_15, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_15, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_14|GPIO_PIN_15, GPIO_PIN_RESET);
+
+  /*Configure GPIO pins : PA2 PA15 */
+  GPIO_InitStruct.Pin = GPIO_PIN_2|GPIO_PIN_15;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
   /*Configure GPIO pins : PB14 PB15 */
   GPIO_InitStruct.Pin = GPIO_PIN_14|GPIO_PIN_15;
@@ -634,13 +729,6 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
-
-  /*Configure GPIO pin : PA15 */
-  GPIO_InitStruct.Pin = GPIO_PIN_15;
-  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
 /* USER CODE BEGIN MX_GPIO_Init_2 */
 /* USER CODE END MX_GPIO_Init_2 */

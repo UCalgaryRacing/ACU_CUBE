@@ -159,7 +159,7 @@ void extract_voltage_reg(uint8_t *voltage_reg, float *voltages);
  * @param cell_voltage floating point array to hold every cell voltage.
  * @param slave_num number of slaves in LTC6811 struct array
  */
-void extract_all_voltages(ltc6811 *ltc6811, float *cell_voltage, int slave_num);
+void extract_all_voltages(ltc6811 *ltc6811_arr, float *cell_voltage, int slave_num);
 
 
 /**
@@ -171,7 +171,7 @@ void extract_all_voltages(ltc6811 *ltc6811, float *cell_voltage, int slave_num);
  * @param ltc6811 array of LTC6811 structs.
  * @param slave_num number of slaves in LTC6811 struct array
  */
-void read_all_voltages(ltc6811 *ltc6811, int slave_num);
+void read_all_voltages(ltc6811 *ltc6811_arr, int slave_num);
 
 void generate_i2c(uint8_t * comm_reg, uint8_t *comm_data, uint8_t len);
 
@@ -181,7 +181,7 @@ void broadcast_command_stcomm(uint16_t command_code);
 
 double calc_temp(double adc_value);
 
-void read_all_temps(ltc6811 *ltc6811, uint8_t mux_channels, int slave_num);
+int read_all_temps(ltc6811 *ltc6811_arr, float *thermistor_temps, uint8_t mux_channels, int slave_num);
 
 
 

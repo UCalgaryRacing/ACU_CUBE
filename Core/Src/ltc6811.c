@@ -74,6 +74,8 @@ void update_config(ltc6811_config *config)
 
     cfgr[5] = config->dcto << 4;
 
+    wake_sleep();
+
     broadcast_write(WRCFGA, cfgr);
 }
 
@@ -372,6 +374,8 @@ void send_comm(ltc6811 slave, uint8_t *i2c_message, uint8_t len) {
 
     generate_i2c(comm_reg, i2c_message, len);
 
+    comm_reg[1] |= 0b00100000;
+
     wake_sleep();
 
     address_write(slave.address, WRCOMM, comm_reg);
@@ -415,6 +419,7 @@ HAL_GPIO_WritePin(LTC6820_CS, GPIO_PIN_SET);
 
 
 double calc_temp(double adc_voltage) {
+	//stole this shit from arduino forum!!!
   double steinhart;
   double resistance = 10000 * adc_voltage / (3 - adc_voltage);
   steinhart = resistance / 10000;     // (R/Ro)
@@ -428,37 +433,46 @@ double calc_temp(double adc_voltage) {
 }
 
 
-void read_all_temps(ltc6811 *ltc6811_arr, uint8_t mux_channels, int slave_num)
+int read_all_temps(ltc6811 *ltc6811_arr, float *thermistor_temps, uint8_t mux_channels, int slave_num)
 {
 	double thermistor_temp;
 	double thermistor_voltage;
+	int thermistor_num = 0;
+	int overtemp_limit = 60;
 	for(int slave = 0; slave < slave_num; slave++)
 	{
 		ltc6811 selected_slave = ltc6811_arr[slave]; //increment over all slaves
 
 		uint8_t i2c_data[2] = {0b10010000, 0b00001000};	//bits 4 - 7 are address bits for the mux IC, bits 11 - 15 are the address bits for the mux channel, start with channel 0
-		for (int i = 0;  i < mux_channels; i++)
+
+
+		for (int i = 0;  i < mux_channels+1; i++)
 		{
 
-
+		  wake_sleep(); // wake LTC6811 from sleep
 		  send_comm(selected_slave, i2c_data, 2);
 
-		  i2c_data[1]++;
 
 		  broadcast_command(ADAX(MD_27k_14k, CHG_GPIO_1)); //measure gpio 1 (mux output)
 
-		  //DELAY?
 
 		  address_read(selected_slave.address, RDAUXA, selected_slave.auxa_reg); //read auxa_reg where adc value was stored
 
+
 		  thermistor_voltage = ((selected_slave.auxa_reg[1] << 8) | selected_slave.auxa_reg[0]) * 0.0001;
 
-		  thermistor_temp = calc_temp(thermistor_voltage); //convert voltage to temperature in degrees celcius
+		  thermistor_temps[thermistor_num] = calc_temp(thermistor_voltage); //convert voltage to temperature in degrees celcius
 
-		  if(thermistor_temp > 60) //if overtemp, trigger shutdown
+
+		  if(thermistor_temps[thermistor_num] > overtemp_limit) //if overtemp, trigger shutdown
 		  {
-			  return; //ADD SDC
+			  return 1; //AMS_OK fault
 		  }
+
+		  thermistor_num++;
+
+		  i2c_data[1]++;
+
 
 
 		}
@@ -471,9 +485,9 @@ void read_all_temps(ltc6811 *ltc6811_arr, uint8_t mux_channels, int slave_num)
 
 		  thermistor_temp = calc_temp(thermistor_voltage); //convert voltage to temperature in degrees celcius
 
-		  if(thermistor_temp > 60) //if overtemp, trigger shutdown
+		  if(thermistor_temp > overtemp_limit) //if overtemp, trigger shutdown
 		  {
-			  return; //ADD SDC
+			  return 1; //ADD SDC
 		  }
 
 		  broadcast_command(ADAX(MD_27k_14k, CHG_GPIO_3)); //measure gpio 3 (non mux'd thermistor)
@@ -484,12 +498,13 @@ void read_all_temps(ltc6811 *ltc6811_arr, uint8_t mux_channels, int slave_num)
 
 		  thermistor_temp = calc_temp(thermistor_voltage); //convert voltage to temperature in degrees celcius
 
-		  if(thermistor_temp > 60) //if overtemp, trigger shutdown
+		  if(thermistor_temp > overtemp_limit) //if overtemp, trigger shutdown
 		  {
-			  return; //ADD SDC
+			  return 1; //ADD SDC
 		  }
+
 	}
 
-
+	  return 0;
 }
 
