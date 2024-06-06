@@ -32,7 +32,9 @@ Drivers/STM32G4xx_HAL_Driver/Src/stm32g4xx_hal_tim.o: \
  ../Drivers/STM32G4xx_HAL_Driver/Inc/stm32g4xx_hal_rtc.h \
  ../Drivers/STM32G4xx_HAL_Driver/Inc/stm32g4xx_hal_rtc_ex.h \
  ../Drivers/STM32G4xx_HAL_Driver/Inc/stm32g4xx_hal_spi.h \
- ../Drivers/STM32G4xx_HAL_Driver/Inc/stm32g4xx_hal_spi_ex.h
+ ../Drivers/STM32G4xx_HAL_Driver/Inc/stm32g4xx_hal_spi_ex.h \
+ ../Drivers/STM32G4xx_HAL_Driver/Inc/stm32g4xx_hal_tim.h \
+ ../Drivers/STM32G4xx_HAL_Driver/Inc/stm32g4xx_hal_tim_ex.h
 ../Drivers/STM32G4xx_HAL_Driver/Inc/stm32g4xx_hal.h:
 ../Core/Inc/stm32g4xx_hal_conf.h:
 ../Drivers/STM32G4xx_HAL_Driver/Inc/stm32g4xx_hal_rcc.h:
@@ -66,3 +68,5 @@ Drivers/STM32G4xx_HAL_Driver/Src/stm32g4xx_hal_tim.o: \
 ../Drivers/STM32G4xx_HAL_Driver/Inc/stm32g4xx_hal_rtc_ex.h:
 ../Drivers/STM32G4xx_HAL_Driver/Inc/stm32g4xx_hal_spi.h:
 ../Drivers/STM32G4xx_HAL_Driver/Inc/stm32g4xx_hal_spi_ex.h:
+../Drivers/STM32G4xx_HAL_Driver/Inc/stm32g4xx_hal_tim.h:
+../Drivers/STM32G4xx_HAL_Driver/Inc/stm32g4xx_hal_tim_ex.h:
