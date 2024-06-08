@@ -52,6 +52,8 @@
 #define BATTERY_CAPCITY 10000
 #define CURRENT_SENSE_RATIO 12.5 //12.5mv / A
 #define CURRENT_SENSE_OFFSET 2500 //at 0A, current sensor voltage is 2.5V
+#define CELL_OVERVOLTAGE 4.2
+#define CELL_UNDERVOLTAGE 2.5
 
 
 
@@ -146,14 +148,29 @@ TxHeader.TxFrameType = FDCAN_DATA_FRAME;
 TxHeader.DataLength = DLC;
 TxHeader.ErrorStateIndicator = FDCAN_ESI_ACTIVE;
 TxHeader.BitRateSwitch = FDCAN_BRS_OFF;
-TxHeader.FDFormat = FDCAN_FD_CAN;
+TxHeader.FDFormat = FDCAN_CLASSIC_CAN;
 TxHeader.TxEventFifoControl = FDCAN_NO_TX_EVENTS;
 TxHeader.MessageMarker = 0;
 
 HAL_FDCAN_AddMessageToTxFifoQ(&hfdcan1, &TxHeader, Tx_Data);
 }
 
-void send_can2();
+void send_can2(uint8_t ID, uint32_t DLC, uint8_t *Tx_Data)
+{
+	FDCAN_TxHeaderTypeDef   TxHeader;
+
+	TxHeader.Identifier = ID;
+	TxHeader.IdType = FDCAN_STANDARD_ID;
+	TxHeader.TxFrameType = FDCAN_DATA_FRAME;
+	TxHeader.DataLength = DLC;
+	TxHeader.ErrorStateIndicator = FDCAN_ESI_ACTIVE;
+	TxHeader.BitRateSwitch = FDCAN_BRS_ON;
+	TxHeader.FDFormat = FDCAN_FD_CAN;
+	TxHeader.TxEventFifoControl = FDCAN_NO_TX_EVENTS;
+	TxHeader.MessageMarker = 0;
+
+	HAL_FDCAN_AddMessageToTxFifoQ(&hfdcan2, &TxHeader, Tx_Data);
+}
 
 
 //NEED TO UPDATE TO HAL
@@ -213,7 +230,7 @@ void update_SOC ()
 {
 
 //double current_sense_voltage = vcu_adc_read_millivolts(&hadc1, ADC_CHANNEL_4);
-current_sense_voltage = adc_val[0] * 2500 / 4096;
+current_sense_voltage = (adc_val[0] * 2900 / 4096) + 54;
 current = current_sense_voltage_to_current(current_sense_voltage);
 
 uint64_t current_ms = HAL_GetTick();
@@ -333,6 +350,22 @@ void discharge_cell_off(ltc6811_config *config, uint8_t cell_num)
 }
 
 
+int check_voltages(float *cell_voltage, int num_cells)
+{
+	for (int cell = 0; cell < num_cells; cell++)
+	{
+		if (cell_voltage[cell] > CELL_OVERVOLTAGE || cell_voltage[cell] < CELL_UNDERVOLTAGE)
+		{
+			return 1;
+		}
+
+	}
+	return 0;
+}
+
+
+
+
 
 /* USER CODE END 0 */
 
@@ -396,6 +429,9 @@ int main(void)
 
   HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_4);
 
+  HAL_FDCAN_Start(&hfdcan1);
+  HAL_FDCAN_Start(&hfdcan2);
+
   //reset_SOC();
 
   init_LTC6811();
@@ -442,15 +478,12 @@ int main(void)
       // calculate actual voltage values
       extract_all_voltages(ltc6811_arr, cell_voltage, NUM_OF_SLAVES);
 
+      check_voltages(cell_voltage, NUM_OF_CELLS);
 
-//      HAL_Delay(100);
-//      discharge_cell_on(&ltc6811_config, 2);
-//
-//      HAL_Delay(1000);
-//
-//      discharge_cell_off(&ltc6811_config, 2);
-//
-//      HAL_Delay(1000);
+      discharge_cell_on(&ltc6811_config, 2);
+
+
+      discharge_cell_off(&ltc6811_config, 2);
 
 
       float sum_voltage = 0;
@@ -475,35 +508,29 @@ int main(void)
 		  AMS_OK = 1;
 	  }
 
-	  HAL_Delay(100);
-//
-//	  if (AMS_OK || fuse_pop)
-//	  {
-//		  //HAL_GPIO_WritePin(GPIOA, GPIO_PIN_2, GPIO_PIN_SET);
-//		  HAL_GPIO_TogglePin(GPIOA, GPIO_PIN_2);
-//
-////		  HAL_Delay(100);
-//	  }
-//	  uint8_t Tx_Data[12] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11};
-//	  send_can1(11, FDCAN_DLC_BYTES_3, Tx_Data);
-//	  HAL_Delay(1000);
+
+	  if (AMS_OK || fuse_pop)
+	  {
+		  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_2, GPIO_PIN_SET);
+		  HAL_GPIO_TogglePin(GPIOA, GPIO_PIN_2);
+
+	  }
+	  uint8_t Tx_Data[8] = {0, 1, 2, 3, 4, 5, 6, 7};
+	  send_can1(11, FDCAN_DLC_BYTES_8, Tx_Data);
+
+	  uint8_t Tx_Data2[12] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11};
+	  send_can2(10, FDCAN_DLC_BYTES_12, Tx_Data2);
 
 
+	  update_SOC();
 
-//	  update_SOC();
-
-//	  input_percentage = calc_voltage_from_adc(adc_val2[1]) / 2900;
-//	  set_fan_duty(input_percentage * 100);
-
-
-
+	  input_percentage = calc_voltage_from_adc(adc_val2[1]) / 2900;
+	  set_fan_duty(input_percentage * 100);
 
 
 
 
 
-
-	  //HAL_Delay(1000);
 
     /* USER CODE END WHILE */
 
@@ -528,14 +555,13 @@ void SystemClock_Config(void)
   /** Initializes the RCC Oscillators according to the specified parameters
   * in the RCC_OscInitTypeDef structure.
   */
-  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI|RCC_OSCILLATORTYPE_LSI;
-  RCC_OscInitStruct.HSIState = RCC_HSI_ON;
-  RCC_OscInitStruct.HSICalibrationValue = RCC_HSICALIBRATION_DEFAULT;
+  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_LSI|RCC_OSCILLATORTYPE_HSE;
+  RCC_OscInitStruct.HSEState = RCC_HSE_ON;
   RCC_OscInitStruct.LSIState = RCC_LSI_ON;
   RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
-  RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSI;
-  RCC_OscInitStruct.PLL.PLLM = RCC_PLLM_DIV1;
-  RCC_OscInitStruct.PLL.PLLN = 15;
+  RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSE;
+  RCC_OscInitStruct.PLL.PLLM = RCC_PLLM_DIV3;
+  RCC_OscInitStruct.PLL.PLLN = 20;
   RCC_OscInitStruct.PLL.PLLP = RCC_PLLP_DIV2;
   RCC_OscInitStruct.PLL.PLLQ = RCC_PLLQ_DIV2;
   RCC_OscInitStruct.PLL.PLLR = RCC_PLLR_DIV2;
@@ -553,7 +579,7 @@ void SystemClock_Config(void)
   RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV1;
   RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV1;
 
-  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_3) != HAL_OK)
+  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_2) != HAL_OK)
   {
     Error_Handler();
   }
@@ -714,17 +740,17 @@ static void MX_FDCAN1_Init(void)
   hfdcan1.Init.ClockDivider = FDCAN_CLOCK_DIV1;
   hfdcan1.Init.FrameFormat = FDCAN_FRAME_CLASSIC;
   hfdcan1.Init.Mode = FDCAN_MODE_NORMAL;
-  hfdcan1.Init.AutoRetransmission = ENABLE;
+  hfdcan1.Init.AutoRetransmission = DISABLE;
   hfdcan1.Init.TransmitPause = DISABLE;
   hfdcan1.Init.ProtocolException = DISABLE;
-  hfdcan1.Init.NominalPrescaler = 12;
-  hfdcan1.Init.NominalSyncJumpWidth = 3;
-  hfdcan1.Init.NominalTimeSeg1 = 16;
-  hfdcan1.Init.NominalTimeSeg2 = 3;
-  hfdcan1.Init.DataPrescaler = 20;
-  hfdcan1.Init.DataSyncJumpWidth = 5;
-  hfdcan1.Init.DataTimeSeg1 = 6;
-  hfdcan1.Init.DataTimeSeg2 = 5;
+  hfdcan1.Init.NominalPrescaler = 2;
+  hfdcan1.Init.NominalSyncJumpWidth = 2;
+  hfdcan1.Init.NominalTimeSeg1 = 31;
+  hfdcan1.Init.NominalTimeSeg2 = 8;
+  hfdcan1.Init.DataPrescaler = 2;
+  hfdcan1.Init.DataSyncJumpWidth = 2;
+  hfdcan1.Init.DataTimeSeg1 = 31;
+  hfdcan1.Init.DataTimeSeg2 = 8;
   hfdcan1.Init.StdFiltersNbr = 0;
   hfdcan1.Init.ExtFiltersNbr = 0;
   hfdcan1.Init.TxFifoQueueMode = FDCAN_TX_FIFO_OPERATION;
@@ -760,15 +786,15 @@ static void MX_FDCAN2_Init(void)
   hfdcan2.Init.AutoRetransmission = DISABLE;
   hfdcan2.Init.TransmitPause = DISABLE;
   hfdcan2.Init.ProtocolException = DISABLE;
-  hfdcan2.Init.NominalPrescaler = 16;
-  hfdcan2.Init.NominalSyncJumpWidth = 1;
-  hfdcan2.Init.NominalTimeSeg1 = 2;
-  hfdcan2.Init.NominalTimeSeg2 = 2;
-  hfdcan2.Init.DataPrescaler = 1;
-  hfdcan2.Init.DataSyncJumpWidth = 1;
-  hfdcan2.Init.DataTimeSeg1 = 1;
-  hfdcan2.Init.DataTimeSeg2 = 1;
-  hfdcan2.Init.StdFiltersNbr = 0;
+  hfdcan2.Init.NominalPrescaler = 2;
+  hfdcan2.Init.NominalSyncJumpWidth = 2;
+  hfdcan2.Init.NominalTimeSeg1 = 31;
+  hfdcan2.Init.NominalTimeSeg2 = 8;
+  hfdcan2.Init.DataPrescaler = 2;
+  hfdcan2.Init.DataSyncJumpWidth = 2;
+  hfdcan2.Init.DataTimeSeg1 = 5;
+  hfdcan2.Init.DataTimeSeg2 = 2;
+  hfdcan2.Init.StdFiltersNbr = 1;
   hfdcan2.Init.ExtFiltersNbr = 0;
   hfdcan2.Init.TxFifoQueueMode = FDCAN_TX_FIFO_OPERATION;
   if (HAL_FDCAN_Init(&hfdcan2) != HAL_OK)
@@ -1053,6 +1079,7 @@ static void MX_GPIO_Init(void)
 /* USER CODE END MX_GPIO_Init_1 */
 
   /* GPIO Ports Clock Enable */
+  __HAL_RCC_GPIOF_CLK_ENABLE();
   __HAL_RCC_GPIOA_CLK_ENABLE();
   __HAL_RCC_GPIOB_CLK_ENABLE();
   __HAL_RCC_GPIOC_CLK_ENABLE();
