@@ -116,6 +116,9 @@ uint32_t frequency = 0;
 float duty = 0;
 float input_percentage;
 
+FDCAN_RxHeaderTypeDef   RxHeader1;
+uint8_t               RxData1[8] = {0};
+
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -364,6 +367,27 @@ int check_voltages(float *cell_voltage, int num_cells)
 }
 
 
+// FDCAN1 Callback
+void HAL_FDCAN_RxFifo0Callback(FDCAN_HandleTypeDef *hfdcan, uint32_t RxFifo0ITs)
+{
+  if((RxFifo0ITs & FDCAN_IT_RX_FIFO0_NEW_MESSAGE) != RESET)
+  {
+    /* Retreive Rx messages from RX FIFO0 */
+    if (HAL_FDCAN_GetRxMessage(hfdcan, FDCAN_RX_FIFO0, &RxHeader1, RxData1) != HAL_OK)
+    {
+    /* Reception Error */
+    Error_Handler();
+    }
+
+    if (HAL_FDCAN_ActivateNotification(hfdcan, FDCAN_IT_RX_FIFO0_NEW_MESSAGE, 0) != HAL_OK)
+    {
+      /* Notification Error */
+      Error_Handler();
+    }
+  }
+}
+
+
 
 
 
@@ -409,7 +433,7 @@ int main(void)
   /* USER CODE BEGIN 2 */
 
 
-
+  //HAL_FDCAN_ConfigGlobalFilter(&hfdcan1, FDCAN_REJECT, FDCAN_REJECT, FDCAN_REJECT_REMOTE, FDCAN_REJECT_REMOTE);
 
 
   HAL_Delay(100); // 100ms should allow all relevant power circuitry to stabilize
@@ -429,8 +453,26 @@ int main(void)
 
   HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_4);
 
+
+  FDCAN_FilterTypeDef sFilterConfig1;
+
+  sFilterConfig1.IdType = FDCAN_STANDARD_ID;
+  sFilterConfig1.FilterIndex = 0;
+  sFilterConfig1.FilterType = FDCAN_FILTER_RANGE;
+  sFilterConfig1.FilterConfig = FDCAN_FILTER_TO_RXFIFO0;
+  sFilterConfig1.FilterID1 = 0x12;
+  sFilterConfig1.FilterID2 = 0x12;
+
+  HAL_FDCAN_ConfigGlobalFilter(&hfdcan1, FDCAN_REJECT, FDCAN_REJECT, FDCAN_REJECT_REMOTE, FDCAN_REJECT_REMOTE);
+
+  HAL_FDCAN_ConfigFilter(&hfdcan1, &sFilterConfig1);
+
+
   HAL_FDCAN_Start(&hfdcan1);
   HAL_FDCAN_Start(&hfdcan2);
+
+  HAL_FDCAN_ActivateNotification(&hfdcan1, FDCAN_IT_RX_FIFO0_NEW_MESSAGE, 0);
+
 
   //reset_SOC();
 
@@ -459,6 +501,16 @@ int main(void)
 
   reset_SOC();
   HAL_GPIO_WritePin(GPIOA, GPIO_PIN_2, GPIO_PIN_RESET);	//set AMS_OK
+
+
+
+
+
+
+
+
+
+
 
   /* USER CODE END 2 */
 
@@ -518,14 +570,14 @@ int main(void)
 	  uint8_t Tx_Data[8] = {0, 1, 2, 3, 4, 5, 6, 7};
 	  send_can1(11, FDCAN_DLC_BYTES_8, Tx_Data);
 
-	  uint8_t Tx_Data2[12] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11};
-	  send_can2(10, FDCAN_DLC_BYTES_12, Tx_Data2);
+//	  uint8_t Tx_Data2[12] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11};
+//	  send_can2(10, FDCAN_DLC_BYTES_12, Tx_Data2);
 
 
 	  update_SOC();
 
-	  input_percentage = calc_voltage_from_adc(adc_val2[1]) / 2900;
-	  set_fan_duty(input_percentage * 100);
+//	  input_percentage = calc_voltage_from_adc(adc_val2[1]) / 2900;
+//	  set_fan_duty(input_percentage * 100);
 
 
 
@@ -751,7 +803,7 @@ static void MX_FDCAN1_Init(void)
   hfdcan1.Init.DataSyncJumpWidth = 2;
   hfdcan1.Init.DataTimeSeg1 = 31;
   hfdcan1.Init.DataTimeSeg2 = 8;
-  hfdcan1.Init.StdFiltersNbr = 0;
+  hfdcan1.Init.StdFiltersNbr = 1;
   hfdcan1.Init.ExtFiltersNbr = 0;
   hfdcan1.Init.TxFifoQueueMode = FDCAN_TX_FIFO_OPERATION;
   if (HAL_FDCAN_Init(&hfdcan1) != HAL_OK)
