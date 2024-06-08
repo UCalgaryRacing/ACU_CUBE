@@ -70,9 +70,12 @@ void update_config(ltc6811_config *config)
 
     cfgr[3] = config->vov >> 4;
 
-    cfgr[4] = 0;
+    cfgr[4] = config -> dcc;
 
     cfgr[5] = config->dcto << 4;
+    cfgr[5] |= config -> dcc >> 4;
+
+
 
     wake_sleep();
 
@@ -439,80 +442,100 @@ double calc_temp(double adc_voltage) {
 
 int read_all_temps(ltc6811 *ltc6811_arr, float *thermistor_temps, uint8_t mux_channels, int slave_num)
 {
-	double thermistor_temp;
 	double thermistor_voltage;
 	int thermistor_num = 0;
-	int overtemp_limit = 60;
+	int overtemp_limit = 100;
+	uint8_t mux_off[2] = {0b10010000, 0b00000000};
 
 
+	//FOR EACH SLAVE
+	  wake_sleep();
+	  broadcast_command(ADAX(MD_27k_14k, CHG_GPIO_3)); //measure gpio 3 (non mux'd thermistor)
+
+	  broadcast_command(ADAX(MD_27k_14k, CHG_GPIO_2)); //measure gpio 2 (non mux'd thermistor)
+
+	  for (int slave = 0; slave < slave_num; slave++) //loop through and read every slave AUXA register to see temps
+	  {
+
+		  ltc6811 selected_slave = ltc6811_arr[slave]; //increment over all slaves
 
 
+		  //READ GPIO 3
+		  address_read(selected_slave.address, RDAUXA, selected_slave.auxa_reg);
 
-		for (int mux = 0; mux < 1; mux++){ //loop through both muxes on a slave
-			uint8_t i2c_data[2] = {0b10010000, 0b00001000};	//bits 4 - 7 are address bits for the mux IC, bits 11 - 15 are the address bits for the mux channel, start with channel 0
-		for (int mux_channel = 0;  mux_channel < mux_channels; mux_channel++)
-		{
+		  thermistor_voltage = ((selected_slave.auxa_reg[5] << 8) | selected_slave.auxa_reg[4]) * 0.0001;
 
-		  wake_sleep(); // wake LTC6811 from sleep
-		  send_comm(i2c_data, 2, 0); //generate commands to access each mux channel
+		  thermistor_temps[thermistor_num] = calc_temp(thermistor_voltage); //convert voltage to temperature in degrees celcius
 
-
-		  broadcast_command(ADAX(MD_27k_14k, CHG_GPIO_1)); //measure gpio 1 (mux output)
-
-
-		  for (int slave = 0; slave < slave_num; slave++) //loop through and read every slave AUXA register to see temps
+		  if(thermistor_temps[thermistor_num] > overtemp_limit) //if overtemp, trigger shutdown
 		  {
-			  ltc6811 selected_slave = ltc6811_arr[slave]; //increment over all slaves
-			  address_read(selected_slave.address, RDAUXA, selected_slave.auxa_reg); //read auxa_reg where adc value was stored
-
-
-			  thermistor_voltage = ((selected_slave.auxa_reg[1] << 8) | selected_slave.auxa_reg[0]) * 0.0001;
-
-			  thermistor_temps[thermistor_num] = calc_temp(thermistor_voltage); //convert voltage to temperature in degrees celcius
-
-
-			  if(thermistor_temps[thermistor_num] > overtemp_limit) //if overtemp, trigger shutdown
-			  {
-				  return 1; //AMS_OK fault
-			  }
+			  return 1; //ADD SDC
 		  }
+
 		  thermistor_num++;
 
-		  i2c_data[1]++;
 
-		}
+		 for (int mux = 0; mux < 2; mux++) //loop through both muxes on a slave
+			 {
+			  	 uint8_t i2c_data[2] = {0b10010000, 0b00001000};	//bits 4 - 7 are address bits for the mux IC, bits 11 - 15 are the address bits for the mux channel, start with channel 0
 
-		}
+				 for (int mux_channel = 0;  mux_channel < mux_channels; mux_channel++)
+				 	 {
 
-		  broadcast_command(ADAX(MD_27k_14k, CHG_GPIO_2)); //measure gpio 2 (non mux'd thermistor)
-		  broadcast_command(ADAX(MD_27k_14k, CHG_GPIO_3)); //measure gpio 3 (non mux'd thermistor)
+					 send_comm(i2c_data, 2, mux); //generate commands to access each mux channel
 
-			  for (int slave = 0; slave < slave_num; slave++) //loop through and read every slave AUXA register to see temps
-			  {
-			  ltc6811 selected_slave = ltc6811_arr[slave]; //increment over all slaves
-			  address_read(selected_slave.address, RDAUXA, selected_slave.auxa_reg);
-
-			  thermistor_voltage = ((selected_slave.auxa_reg[3] << 8) | selected_slave.auxa_reg[2]) * 0.0001;
-
-			  thermistor_temp = calc_temp(thermistor_voltage); //convert voltage to temperature in degrees celcius
-
-			  if(thermistor_temp > overtemp_limit) //if overtemp, trigger shutdown
-			  {
-				  return 1; //ADD SDC
-			  }
+					 broadcast_command(ADAX(MD_27k_14k, CHG_GPIO_1)); //measure gpio 1 (mux output)
 
 
-			  address_read(selected_slave.address, RDAUXA, selected_slave.auxa_reg);
+					 address_read(selected_slave.address, RDAUXA, selected_slave.auxa_reg); //read auxa_reg where adc value was stored
 
-			  thermistor_voltage = ((selected_slave.auxa_reg[5] << 8) | selected_slave.auxa_reg[4]) * 0.0001;
 
-			  thermistor_temp = calc_temp(thermistor_voltage); //convert voltage to temperature in degrees celcius
+					 thermistor_voltage = ((selected_slave.auxa_reg[1] << 8) | selected_slave.auxa_reg[0]) * 0.0001;
 
-			  if(thermistor_temp > overtemp_limit) //if overtemp, trigger shutdown
-			  {
-				  return 1; //ADD SDC
-			  }
+
+					 thermistor_temps[thermistor_num] = calc_temp(thermistor_voltage); //convert voltage to temperature in degrees celcius
+
+
+					 if(thermistor_temps[thermistor_num] > overtemp_limit) //if overtemp, trigger shutdown
+					 	 {
+						  return 1; //AMS_OK fault
+					 	 }
+
+					  thermistor_num++;
+
+					  i2c_data[1]++;
+
+				 	 }
+				  send_comm(mux_off, 2, mux);
+
+			 }
+
+
+		  address_read(selected_slave.address, RDAUXA, selected_slave.auxa_reg);
+
+		  thermistor_voltage = ((selected_slave.auxa_reg[3] << 8) | selected_slave.auxa_reg[2]) * 0.0001;
+
+		  thermistor_temps[thermistor_num] = calc_temp(thermistor_voltage); //convert voltage to temperature in degrees celcius
+
+		  if(thermistor_temps[thermistor_num] > overtemp_limit) //if overtemp, trigger shutdown
+		  {
+			  return 1; //ADD SDC
 		  }
+
+		  thermistor_num++;
+	  }
+
+
+
+
+	//ADD TO ARRAY
+	//LOOP THROUGH MUX 0 AND MUX 1
+	//ADD TO ARRAY
+	//READ GPIO 2
+	//ADD TO ARRAY
+
+
+
 
 
 
@@ -521,5 +544,134 @@ int read_all_temps(ltc6811 *ltc6811_arr, float *thermistor_temps, uint8_t mux_ch
 
 	  return 0;
 
+
+
+
 }
+
+
+
+
+//
+//
+//
+//	double thermistor_temp;
+//		double thermistor_voltage;
+//		int thermistor_num = 0;
+//		int overtemp_limit = 60;
+//
+//		wake_sleep();
+//
+//
+//		  broadcast_command(ADAX(MD_27k_14k, CHG_GPIO_3)); //measure gpio 3 (non mux'd thermistor)
+//
+//
+//		  for (int slave = 0; slave < slave_num; slave++) //loop through and read every slave AUXA register to see temps
+//		  {
+//			  ltc6811 selected_slave = ltc6811_arr[slave]; //increment over all slaves
+//
+//
+//			  address_read(selected_slave.address, RDAUXA, selected_slave.auxa_reg);
+//
+//			  thermistor_voltage = ((selected_slave.auxa_reg[5] << 8) | selected_slave.auxa_reg[4]) * 0.0001;
+//
+//			  thermistor_temps[thermistor_num] = calc_temp(thermistor_voltage); //convert voltage to temperature in degrees celcius
+//
+//			  if(thermistor_temp > overtemp_limit) //if overtemp, trigger shutdown
+//			  {
+//				  return 1; //ADD SDC
+//			  }
+//
+//			  thermistor_num++;
+//		  }
+//
+//
+//
+//			for (int mux = 0; mux < 2; mux++){ //loop through both muxes on a slave
+//				uint8_t i2c_data[2] = {0b10010000, 0b00001000};	//bits 4 - 7 are address bits for the mux IC, bits 11 - 15 are the address bits for the mux channel, start with channel 0
+//			for (int mux_channel = 0;  mux_channel < mux_channels; mux_channel++)
+//			{
+//
+//			  wake_sleep(); // wake LTC6811 from sleep
+//			  send_comm(i2c_data, 2, mux); //generate commands to access each mux channel
+//
+//
+//			  broadcast_command(ADAX(MD_27k_14k, CHG_GPIO_1)); //measure gpio 1 (mux output)
+//
+//			  for (int slave = 0; slave < slave_num; slave++) //loop through and read every slave AUXA register to see temps
+//			  {
+//				  ltc6811 selected_slave = ltc6811_arr[slave]; //increment over all slaves
+//				  address_read(selected_slave.address, RDAUXA, selected_slave.auxa_reg); //read auxa_reg where adc value was stored
+//
+//
+//				  thermistor_voltage = ((selected_slave.auxa_reg[1] << 8) | selected_slave.auxa_reg[0]) * 0.0001;
+//
+//				  thermistor_temps[thermistor_num] = calc_temp(thermistor_voltage); //convert voltage to temperature in degrees celcius
+//
+//
+//				  if(thermistor_temps[thermistor_num] > overtemp_limit) //if overtemp, trigger shutdown
+//				  {
+//					  return 1; //AMS_OK fault
+//				  }
+//
+//
+//			  thermistor_num++;
+//
+//			  i2c_data[1]++;
+//			  }
+//
+//			}
+//			}
+//
+//
+//
+//
+//
+//
+//
+//
+//
+//
+//
+//			  broadcast_command(ADAX(MD_27k_14k, CHG_GPIO_2)); //measure gpio 2 (non mux'd thermistor)
+//
+//			  				  for (int slave = 0; slave < slave_num; slave++) //loop through and read every slave AUXA register to see temps
+//			  				  {
+//			  				  ltc6811 selected_slave = ltc6811_arr[slave]; //increment over all slaves
+//			  				  address_read(selected_slave.address, RDAUXA, selected_slave.auxa_reg);
+//
+//			  				  thermistor_voltage = ((selected_slave.auxa_reg[3] << 8) | selected_slave.auxa_reg[2]) * 0.0001;
+//
+//			  				  thermistor_temps[thermistor_num] = calc_temp(thermistor_voltage); //convert voltage to temperature in degrees celcius
+//
+//			  				  if(thermistor_temp > overtemp_limit) //if overtemp, trigger shutdown
+//			  				  {
+//			  					  return 1; //ADD SDC
+//			  				  }
+//
+//			  				  thermistor_num++;
+//			  				  }
+//
+//
+//
+//
+//
+//
+//
+
+
+
+//
+//		  return 0;
+
+
+
+
+
+
+
+
+
+
+
 

@@ -13,6 +13,7 @@ typedef struct ltc6811_config {
     uint16_t vuv;
     uint16_t vov;
     uint8_t dcto;
+    uint16_t dcc;
 }ltc6811_config;
 
 

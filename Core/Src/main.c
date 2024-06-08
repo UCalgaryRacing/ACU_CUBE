@@ -40,12 +40,12 @@
 /* USER CODE BEGIN PD */
 
 
-#define NUM_OF_SLAVES 2
+#define NUM_OF_SLAVES 1
 #define NUM_OF_CELLS 12 * NUM_OF_SLAVES
 #define EVEN_SLAVE_CELLS 12
 #define ODD_SLAVE_CELLS 11
 #define NUM_OF_MUX_CHANNELS 8
-#define NUM_OF_THERMISTORS (36 * NUM_OF_SLAVES)
+#define NUM_OF_THERMISTORS (18 * NUM_OF_SLAVES)
 #define MOVING_AVERAGE_SAMPLES 10 //number of samples to take exponential moving average over
 #define VOLTAGE_SAG_PERCENT_TOLERANCE 10 //percentage cells are allowed to deviate from moving average without being considered fusable link pop
 
@@ -320,6 +320,18 @@ float calc_voltage_from_adc(int adc_val)
 	return val_mv;
 }
 
+void discharge_cell_on(ltc6811_config *config, uint8_t cell_num)
+{
+	config -> dcc = (1 << (cell_num - 1));
+	update_config(config);
+}
+
+void discharge_cell_off(ltc6811_config *config, uint8_t cell_num)
+{
+	config -> dcc = 0;
+	update_config(config);
+}
+
 
 
 /* USER CODE END 0 */
@@ -397,6 +409,7 @@ int main(void)
   ltc6811_config.adcopt = ADCOPT_MODE_0;
   ltc6811_config.vuv = 0;
   ltc6811_config.vov = 0;
+  ltc6811_config.dcc = 0;
   ltc6811_config.dcto = 0;
   update_config(&ltc6811_config);
 
@@ -429,28 +442,40 @@ int main(void)
       // calculate actual voltage values
       extract_all_voltages(ltc6811_arr, cell_voltage, NUM_OF_SLAVES);
 
-      HAL_Delay(100);
-      //float sum_voltage = 0;
-//      for(int i = 0; i < NUM_OF_CELLS; i++)
-//      {
-//      update_moving_average(&cell_voltage_ma[i], cell_voltage[i]);
-//      sum_voltage += cell_voltage_ma[i];
-//      }
-//      float average_voltage = sum_voltage / NUM_OF_CELLS;
+
+//      HAL_Delay(100);
+//      discharge_cell_on(&ltc6811_config, 2);
 //
-//      for(int i = 0; i < NUM_OF_CELLS; i++)
-//      {
-//      if(check_fusable_link(average_voltage, cell_voltage[i]))
-//      {
-//    	  fuse_pop = 1;
-//      }
-//      }
+//      HAL_Delay(1000);
 //
+//      discharge_cell_off(&ltc6811_config, 2);
 //
-//	  if(read_all_temps(ltc6811_arr, thermistor_temps, NUM_OF_MUX_CHANNELS, NUM_OF_SLAVES)) //0 = no fault, 1 = fault
-//	  {
-//		  AMS_OK = 1;
-//	  }
+//      HAL_Delay(1000);
+
+
+      float sum_voltage = 0;
+      for(int i = 0; i < NUM_OF_CELLS; i++)
+      {
+      update_moving_average(&cell_voltage_ma[i], cell_voltage[i]);
+      sum_voltage += cell_voltage_ma[i];
+      }
+      float average_voltage = sum_voltage / NUM_OF_CELLS;
+
+      for(int i = 0; i < NUM_OF_CELLS; i++)
+      {
+      if(check_fusable_link(average_voltage, cell_voltage[i]))
+      {
+    	  fuse_pop = 1;
+      }
+      }
+
+
+	  if(read_all_temps(ltc6811_arr, thermistor_temps, NUM_OF_MUX_CHANNELS, NUM_OF_SLAVES)) //0 = no fault, 1 = fault
+	  {
+		  AMS_OK = 1;
+	  }
+
+	  HAL_Delay(100);
 //
 //	  if (AMS_OK || fuse_pop)
 //	  {
