@@ -40,7 +40,7 @@
 /* USER CODE BEGIN PD */
 
 
-#define NUM_OF_SLAVES 1
+#define NUM_OF_SLAVES 2
 #define NUM_OF_CELLS 12 * NUM_OF_SLAVES
 #define EVEN_SLAVE_CELLS 12
 #define ODD_SLAVE_CELLS 11
@@ -532,10 +532,6 @@ int main(void)
 
       check_voltages(cell_voltage, NUM_OF_CELLS);
 
-      discharge_cell_on(&ltc6811_config, 2);
-
-
-      discharge_cell_off(&ltc6811_config, 2);
 
 
       float sum_voltage = 0;
@@ -550,23 +546,26 @@ int main(void)
       {
       if(check_fusable_link(average_voltage, cell_voltage[i]))
       {
-    	  fuse_pop = 1;
+    	  //AMS_OK = 1; //OPEN AMS FAULT
+    	  //fuse_pop = 1;
+    	  asm("NOP");
       }
       }
 
 
 	  if(read_all_temps(ltc6811_arr, thermistor_temps, NUM_OF_MUX_CHANNELS, NUM_OF_SLAVES)) //0 = no fault, 1 = fault
 	  {
-		  AMS_OK = 1;
+		  AMS_OK = 1; //AMS FAULT
 	  }
 
 
-	  if (AMS_OK || fuse_pop)
-	  {
-		  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_2, GPIO_PIN_SET);
-		  HAL_GPIO_TogglePin(GPIOA, GPIO_PIN_2);
-
-	  }
+//	  if (AMS_OK || fuse_pop)
+//	  {
+//		  //OPEN AMS RELAY FOR SDC
+//		  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_2, GPIO_PIN_SET);
+//		  HAL_GPIO_TogglePin(GPIOA, GPIO_PIN_2);
+//
+//	  }
 	  uint8_t Tx_Data[8] = {0, 1, 2, 3, 4, 5, 6, 7};
 	  send_can1(11, FDCAN_DLC_BYTES_8, Tx_Data);
 
