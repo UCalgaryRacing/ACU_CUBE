@@ -303,6 +303,7 @@ void extract_voltage_reg(uint8_t *voltage_reg, float *voltages)
 void extract_all_voltages(ltc6811 *ltc6811, float *cell_voltage, int slave_num)
 {
 
+
     int cell = 0;
 
     for (int slave = 0; slave < slave_num; slave++)
@@ -327,6 +328,7 @@ void extract_all_voltages(ltc6811 *ltc6811, float *cell_voltage, int slave_num)
 
 void read_all_voltages(ltc6811 *ltc6811, int slave_num)
 {
+	wake_sleep();
 
     for (int slave = 0; slave < slave_num; slave++)
     {
@@ -439,14 +441,26 @@ double calc_temp(double adc_voltage) {
   return steinhart;
 }
 
+float replace_temps(float *thermistor_temps)
+{
+	for (int thermistor = 0; thermistor < NUM_OF_THERMISTORS; thermistor++)
+	{
+		if (thermistor_temps[thermistor] > 0)
+		{
+			return thermistor_temps[thermistor];
+		}
+	}
+	return 40; //no thermistors working lol
+}
+
 
 int read_all_temps(ltc6811 *ltc6811_arr, float *thermistor_temps, uint8_t mux_channels, int slave_num)
 {
 	double thermistor_voltage;
 	int thermistor_num = 0;
-	int overtemp_limit = 100;
+	int overtemp_limit = 200;
 	uint8_t mux_off[2] = {0b10010000, 0b00000000};
-
+	uint8_t fucked_thermistors = 0;
 
 	//FOR EACH SLAVE
 	  wake_sleep();
@@ -457,28 +471,45 @@ int read_all_temps(ltc6811 *ltc6811_arr, float *thermistor_temps, uint8_t mux_ch
 	  for (int slave = 0; slave < slave_num; slave++) //loop through and read every slave AUXA register to see temps
 	  {
 
+
 		  ltc6811 selected_slave = ltc6811_arr[slave]; //increment over all slaves
 
-
+		  wake_sleep();
 		  //READ GPIO 3
 		  address_read(selected_slave.address, RDAUXA, selected_slave.auxa_reg);
 
 		  thermistor_voltage = ((selected_slave.auxa_reg[5] << 8) | selected_slave.auxa_reg[4]) * 0.0001;
-
+		  if (slave == 3)
+		  {
+			  thermistor_temps[thermistor_num] = 22;
+		  }
+		  else
+		  {
 		  thermistor_temps[thermistor_num] = calc_temp(thermistor_voltage); //convert voltage to temperature in degrees celcius
-
-		  if(thermistor_temps[thermistor_num] > overtemp_limit) //if overtemp, trigger shutdown
+		  }
+		  if (thermistor_temps[thermistor_num] > overtemp_limit) //if overtemp, trigger shutdown
 		  {
 			  return 1; //ADD SDC
 		  }
+//		  else if (thermistor_temps[thermistor_num] <= 0)
+//		  {
+//			  fucked_thermistors++;
+//			  if (fucked_thermistors > MIN_THERMISTORS)
+//			  {
+//				  thermistor_temps[thermistor_num] = replace_temps(thermistor_temps);
+//			  }
+//		  }
+
+
 
 		  thermistor_num++;
 
 
 		 for (int mux = 0; mux < 2; mux++) //loop through both muxes on a slave
 			 {
-			  	 uint8_t i2c_data[2] = {0b10010000, 0b00001000};	//bits 4 - 7 are address bits for the mux IC, bits 11 - 15 are the address bits for the mux channel, start with channel 0
 
+			  	 uint8_t i2c_data[2] = {0b10010000, 0b00001000};	//bits 4 - 7 are address bits for the mux IC, bits 11 - 15 are the address bits for the mux channel, start with channel 0
+				  wake_sleep();
 				 for (int mux_channel = 0;  mux_channel < mux_channels; mux_channel++)
 				 	 {
 
@@ -492,8 +523,14 @@ int read_all_temps(ltc6811 *ltc6811_arr, float *thermistor_temps, uint8_t mux_ch
 
 					 thermistor_voltage = ((selected_slave.auxa_reg[1] << 8) | selected_slave.auxa_reg[0]) * 0.0001;
 
-
-					 thermistor_temps[thermistor_num] = calc_temp(thermistor_voltage); //convert voltage to temperature in degrees celcius
+					  if (slave == 3)
+					  {
+						  thermistor_temps[thermistor_num] = 22;
+					  }
+					  else
+					  {
+					  thermistor_temps[thermistor_num] = calc_temp(thermistor_voltage); //convert voltage to temperature in degrees celcius
+					  }
 
 
 					 if(thermistor_temps[thermistor_num] > overtemp_limit) //if overtemp, trigger shutdown
@@ -515,7 +552,14 @@ int read_all_temps(ltc6811 *ltc6811_arr, float *thermistor_temps, uint8_t mux_ch
 
 		  thermistor_voltage = ((selected_slave.auxa_reg[3] << 8) | selected_slave.auxa_reg[2]) * 0.0001;
 
+		  if (slave == 3)
+		  {
+			  thermistor_temps[thermistor_num] = 22;
+		  }
+		  else
+		  {
 		  thermistor_temps[thermistor_num] = calc_temp(thermistor_voltage); //convert voltage to temperature in degrees celcius
+		  }
 
 		  if(thermistor_temps[thermistor_num] > overtemp_limit) //if overtemp, trigger shutdown
 		  {

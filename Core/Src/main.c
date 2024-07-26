@@ -23,6 +23,7 @@
 /* USER CODE BEGIN Includes */
 #include "ltc6811.h"
 #include "global_definitions.h"
+//#include "ucr1.h"
 
 #include <inttypes.h>
 #include <stddef.h>
@@ -40,20 +41,22 @@
 /* USER CODE BEGIN PD */
 
 
-#define NUM_OF_SLAVES 2
-#define NUM_OF_CELLS 12 * NUM_OF_SLAVES
+#define NUM_OF_SLAVES 10
+#define NUM_OF_CELLS 115
 #define EVEN_SLAVE_CELLS 12
 #define ODD_SLAVE_CELLS 11
 #define NUM_OF_MUX_CHANNELS 8
-#define NUM_OF_THERMISTORS (18 * NUM_OF_SLAVES)
+
 #define MOVING_AVERAGE_SAMPLES 10 //number of samples to take exponential moving average over
 #define VOLTAGE_SAG_PERCENT_TOLERANCE 10 //percentage cells are allowed to deviate from moving average without being considered fusable link pop
 
-#define BATTERY_CAPCITY 10000
+#define BATTERY_CAPACITY 10
+#define SOC_CONSTANT BATTERY_CAPACITY * 100
 #define CURRENT_SENSE_RATIO 12.5 //12.5mv / A
 #define CURRENT_SENSE_OFFSET 2500 //at 0A, current sensor voltage is 2.5V
 #define CELL_OVERVOLTAGE 4.2
 #define CELL_UNDERVOLTAGE 2.5
+
 
 
 
@@ -70,8 +73,12 @@ ADC_HandleTypeDef hadc2;
 DMA_HandleTypeDef hdma_adc1;
 DMA_HandleTypeDef hdma_adc2;
 
+CORDIC_HandleTypeDef hcordic;
+
 FDCAN_HandleTypeDef hfdcan1;
 FDCAN_HandleTypeDef hfdcan2;
+
+FMAC_HandleTypeDef hfmac;
 
 RTC_HandleTypeDef hrtc;
 
@@ -115,10 +122,15 @@ uint32_t ICValue = 0;
 uint32_t frequency = 0;
 float duty = 0;
 float input_percentage;
+float max_temp;
 
 FDCAN_RxHeaderTypeDef   RxHeader1;
 uint8_t               RxData1[8] = {0};
 
+uint8_t TS_active[1] = {0x00};
+uint8_t prev_TS_active = 0x00;
+
+uint8_t can_test[1] = {0};
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -127,12 +139,14 @@ static void MX_GPIO_Init(void);
 static void MX_DMA_Init(void);
 static void MX_RTC_Init(void);
 static void MX_FDCAN1_Init(void);
-static void MX_FDCAN2_Init(void);
 static void MX_SPI3_Init(void);
 static void MX_ADC1_Init(void);
 static void MX_ADC2_Init(void);
 static void MX_TIM2_Init(void);
 static void MX_TIM15_Init(void);
+static void MX_FDCAN2_Init(void);
+static void MX_CORDIC_Init(void);
+static void MX_FMAC_Init(void);
 /* USER CODE BEGIN PFP */
 
 /* USER CODE END PFP */
@@ -141,7 +155,7 @@ static void MX_TIM15_Init(void);
 /* USER CODE BEGIN 0 */
 
 //FIGURE OUT WHICH BUS IS LOGGING AND WHICH IS COMMANDS
-void send_can1(uint8_t ID, uint32_t DLC, uint8_t *Tx_Data)
+void send_can1(uint16_t ID, uint32_t DLC, uint8_t *Tx_Data)
 {
 FDCAN_TxHeaderTypeDef   TxHeader;
 
@@ -155,25 +169,44 @@ TxHeader.FDFormat = FDCAN_CLASSIC_CAN;
 TxHeader.TxEventFifoControl = FDCAN_NO_TX_EVENTS;
 TxHeader.MessageMarker = 0;
 
+
 HAL_FDCAN_AddMessageToTxFifoQ(&hfdcan1, &TxHeader, Tx_Data);
 }
 
-void send_can2(uint8_t ID, uint32_t DLC, uint8_t *Tx_Data)
+void send_can2(uint16_t ID, uint32_t DLC, uint8_t *Tx_Data)
 {
-	FDCAN_TxHeaderTypeDef   TxHeader;
+FDCAN_TxHeaderTypeDef   TxHeader;
 
-	TxHeader.Identifier = ID;
-	TxHeader.IdType = FDCAN_STANDARD_ID;
-	TxHeader.TxFrameType = FDCAN_DATA_FRAME;
-	TxHeader.DataLength = DLC;
-	TxHeader.ErrorStateIndicator = FDCAN_ESI_ACTIVE;
-	TxHeader.BitRateSwitch = FDCAN_BRS_ON;
-	TxHeader.FDFormat = FDCAN_FD_CAN;
-	TxHeader.TxEventFifoControl = FDCAN_NO_TX_EVENTS;
-	TxHeader.MessageMarker = 0;
+TxHeader.Identifier = ID;
+TxHeader.IdType = FDCAN_STANDARD_ID;
+TxHeader.TxFrameType = FDCAN_DATA_FRAME;
+TxHeader.DataLength = DLC;
+TxHeader.ErrorStateIndicator = FDCAN_ESI_ACTIVE;
+TxHeader.BitRateSwitch = FDCAN_BRS_OFF;
+TxHeader.FDFormat = FDCAN_FD_CAN;
+TxHeader.TxEventFifoControl = FDCAN_NO_TX_EVENTS;
+TxHeader.MessageMarker = 0;
 
-	HAL_FDCAN_AddMessageToTxFifoQ(&hfdcan2, &TxHeader, Tx_Data);
+
+HAL_FDCAN_AddMessageToTxFifoQ(&hfdcan2, &TxHeader, Tx_Data);
 }
+
+//void send_can2(uint8_t ID, uint32_t DLC, uint8_t *Tx_Data)
+//{
+//	FDCAN_TxHeaderTypeDef   TxHeader;
+//
+//	TxHeader.Identifier = ID;
+//	TxHeader.IdType = FDCAN_STANDARD_ID;
+//	TxHeader.TxFrameType = FDCAN_DATA_FRAME;
+//	TxHeader.DataLength = DLC;
+//	TxHeader.ErrorStateIndicator = FDCAN_ESI_ACTIVE;
+//	TxHeader.BitRateSwitch = FDCAN_BRS_ON;
+//	TxHeader.FDFormat = FDCAN_FD_CAN;
+//	TxHeader.TxEventFifoControl = FDCAN_NO_TX_EVENTS;
+//	TxHeader.MessageMarker = 0;
+//
+//	HAL_FDCAN_AddMessageToTxFifoQ(&hfdcan2, &TxHeader, Tx_Data);
+//}
 
 
 //NEED TO UPDATE TO HAL
@@ -242,7 +275,7 @@ time_since_last_update = current_ms - last_SOC_update_ms;
 
 last_SOC_update_ms = current_ms;
 
-SOC -= current * time_since_last_update / BATTERY_CAPCITY;
+SOC -= current * time_since_last_update / SOC_CONSTANT;
 
 }
 
@@ -271,21 +304,23 @@ void set_moving_average(float *cell_voltage_ma, float *cell_voltage)
 }
 
 int check_imd_measure()
-//prob need to change ranges if pwm measurement sucks
 {
+	//7 = error, 8 = error, 9 = invalid, every other number returns frequency
 	switch (frequency){
 		case 0:
 			return 1;
 			break;
-		case 10:
-			if (duty < 5 && duty < 95)
+		case 10: //normal condition
+			if (duty < 5 && duty < 10)
 				return 0;
-			else return 1;
+			else if (duty > 90 && duty < 95)
+				return 1;
+			else return 7;
 			break;
-		case 20:
+		case 20: //undervoltage
 			return 2;
 			break;
-		case 30:
+		case 30: //speed start measurement
 			if(duty > 5 && duty <= 10){
 				return 0;
 			}
@@ -302,7 +337,7 @@ int check_imd_measure()
 	return 6; //did not read freuency accurately
 }
 
-int check_imd_status()
+void check_imd_status()
 {
 	IMD_OK = HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_14);
 }
@@ -310,22 +345,22 @@ int check_imd_status()
 
 
 
-void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef *htim)
-{
-	if (htim->Channel == HAL_TIM_ACTIVE_CHANNEL_2)  // If the interrupt is triggered by channel 1
-	{
-		// Read the IC value
-		ICValue = HAL_TIM_ReadCapturedValue(htim, TIM_CHANNEL_2);
-
-		if (ICValue != 0)
-		{
-			// calculate the Duty Cycle
-			duty = (HAL_TIM_ReadCapturedValue(htim, TIM_CHANNEL_1) *100)/ICValue;
-
-			frequency = 7500/ICValue;
-		}
-	}
-}
+//void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef *htim)
+//{
+//	if (htim->Channel == HAL_TIM_ACTIVE_CHANNEL_2)  // If the interrupt is triggered by channel 1
+//	{
+//		// Read the IC value
+//		ICValue = HAL_TIM_ReadCapturedValue(htim, TIM_CHANNEL_2);
+//
+//		if (ICValue != 0)
+//		{
+//			// calculate the Duty Cycle
+//			duty = (HAL_TIM_ReadCapturedValue(htim, TIM_CHANNEL_1) *100)/ICValue;
+//
+//			frequency = 7500/ICValue;
+//		}
+//	}
+//}
 
 void set_fan_duty(uint8_t percent)
 {
@@ -387,6 +422,18 @@ void HAL_FDCAN_RxFifo0Callback(FDCAN_HandleTypeDef *hfdcan, uint32_t RxFifo0ITs)
   }
 }
 
+int check_empty_voltages()
+{
+	  for (int cell = 0; cell < NUM_OF_CELLS; cell++)
+	  {
+		  if (cell_voltage[cell] == 0)
+		  {
+			  return 1;
+		  }
+	  }
+		  return 0;
+}
+
 
 
 
@@ -424,16 +471,15 @@ int main(void)
   MX_DMA_Init();
   MX_RTC_Init();
   MX_FDCAN1_Init();
-  MX_FDCAN2_Init();
   MX_SPI3_Init();
   MX_ADC1_Init();
   MX_ADC2_Init();
   MX_TIM2_Init();
   MX_TIM15_Init();
+  MX_FDCAN2_Init();
+  MX_CORDIC_Init();
+  MX_FMAC_Init();
   /* USER CODE BEGIN 2 */
-
-
-  //HAL_FDCAN_ConfigGlobalFilter(&hfdcan1, FDCAN_REJECT, FDCAN_REJECT, FDCAN_REJECT_REMOTE, FDCAN_REJECT_REMOTE);
 
 
   HAL_Delay(100); // 100ms should allow all relevant power circuitry to stabilize
@@ -448,11 +494,12 @@ int main(void)
   HAL_ADC_Start(&hadc2);
 
   //start PWM measurement for IMD measurement
-  HAL_TIM_IC_Start_IT(&htim15, TIM_CHANNEL_2);   // main channel
-  HAL_TIM_IC_Start(&htim15, TIM_CHANNEL_1);   // indirect channel
+  //HAL_TIM_IC_Start_IT(&htim15, TIM_CHANNEL_2);   // main channel
+  //HAL_TIM_IC_Start(&htim15, TIM_CHANNEL_1);   // indirect channel
 
-  HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_4);
+  //HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_4);
 
+  HAL_FDCAN_ConfigGlobalFilter(&hfdcan1, FDCAN_REJECT, FDCAN_REJECT, FDCAN_REJECT_REMOTE, FDCAN_REJECT_REMOTE);
 
   FDCAN_FilterTypeDef sFilterConfig1;
 
@@ -460,16 +507,16 @@ int main(void)
   sFilterConfig1.FilterIndex = 0;
   sFilterConfig1.FilterType = FDCAN_FILTER_RANGE;
   sFilterConfig1.FilterConfig = FDCAN_FILTER_TO_RXFIFO0;
-  sFilterConfig1.FilterID1 = 0x12;
-  sFilterConfig1.FilterID2 = 0x12;
+  sFilterConfig1.FilterID1 = 0x500;
+  sFilterConfig1.FilterID2 = 0x500;
 
-  HAL_FDCAN_ConfigGlobalFilter(&hfdcan1, FDCAN_REJECT, FDCAN_REJECT, FDCAN_REJECT_REMOTE, FDCAN_REJECT_REMOTE);
+
 
   HAL_FDCAN_ConfigFilter(&hfdcan1, &sFilterConfig1);
 
 
   HAL_FDCAN_Start(&hfdcan1);
-  HAL_FDCAN_Start(&hfdcan2);
+  //HAL_FDCAN_Start(&hfdcan2);
 
   HAL_FDCAN_ActivateNotification(&hfdcan1, FDCAN_IT_RX_FIFO0_NEW_MESSAGE, 0);
 
@@ -498,9 +545,29 @@ int main(void)
       ltc6811_arr[i].address = i;
       ltc6811_arr[i].cell_count = (i % 2 == 0) ? EVEN_SLAVE_CELLS : ODD_SLAVE_CELLS;
   }
+  while(check_empty_voltages())
+  {
+
+
+  broadcast_command(ADCV(MD_27k_14k, DCP_NOT_PERMITTED, CH_ALL));
+
+
+  HAL_Delay(1); // reading all cell voltages @ "27kHz" should take 1ms
+
+  // read cell voltage registers from all slaves on the bus
+  read_all_voltages(ltc6811_arr, NUM_OF_SLAVES);
+
+  // calculate actual voltage values
+  extract_all_voltages(ltc6811_arr, cell_voltage, NUM_OF_SLAVES);
+
+  }
+
 
   reset_SOC();
-  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_2, GPIO_PIN_RESET);	//set AMS_OK
+  set_moving_average(cell_voltage_ma, cell_voltage); //set moving average to prevent errors during startup
+  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_2, GPIO_PIN_SET);	//set AMS_OK
+
+
 
 
 
@@ -518,9 +585,11 @@ int main(void)
   /* USER CODE BEGIN WHILE */
   while (1)
   {
+
       wake_sleep(); // wake LTC6811 from sleep
       // send command to read cell voltages
       broadcast_command(ADCV(MD_27k_14k, DCP_NOT_PERMITTED, CH_ALL));
+
 
       HAL_Delay(1); // reading all cell voltages @ "27kHz" should take 1ms
 
@@ -530,7 +599,10 @@ int main(void)
       // calculate actual voltage values
       extract_all_voltages(ltc6811_arr, cell_voltage, NUM_OF_SLAVES);
 
-      check_voltages(cell_voltage, NUM_OF_CELLS);
+      if (check_voltages(cell_voltage, NUM_OF_CELLS))
+      {
+    	  AMS_OK = 1;
+      }
 
 
 
@@ -540,23 +612,89 @@ int main(void)
       update_moving_average(&cell_voltage_ma[i], cell_voltage[i]);
       sum_voltage += cell_voltage_ma[i];
       }
-      float average_voltage = sum_voltage / NUM_OF_CELLS;
+      //float average_voltage = sum_voltage / NUM_OF_CELLS;
+      //send_can1(5, FDCAN_DLC_BYTES_4, &sum_voltage);
 
-      for(int i = 0; i < NUM_OF_CELLS; i++)
-      {
-      if(check_fusable_link(average_voltage, cell_voltage[i]))
-      {
-    	  //AMS_OK = 1; //OPEN AMS FAULT
-    	  //fuse_pop = 1;
-    	  asm("NOP");
-      }
-      }
+//      for(int i = 0; i < NUM_OF_CELLS; i++)
+//      {
+//      if(check_fusable_link(average_voltage, cell_voltage[i]))
+//      {
+//    	  AMS_OK = 1; //OPEN AMS FAULT
+//    	  //fuse_pop = 1;
+//      }
+//      }
 
 
 	  if(read_all_temps(ltc6811_arr, thermistor_temps, NUM_OF_MUX_CHANNELS, NUM_OF_SLAVES)) //0 = no fault, 1 = fault
 	  {
 		  AMS_OK = 1; //AMS FAULT
 	  }
+
+	  if(AMS_OK)
+	  {
+		  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_2, GPIO_PIN_RESET);
+	  }
+//	  else
+//	  {
+//		  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_2, GPIO_PIN_SET);
+//	  }
+	  max_temp = thermistor_temps[0];
+	  for(int thermistor = 0; thermistor < NUM_OF_THERMISTORS; thermistor++)
+	  {
+		  if (thermistor_temps[thermistor] > max_temp)
+		  {
+			  max_temp = thermistor_temps[thermistor];
+		  }
+	  }
+//	  float[64] max_temps;
+//	  for (int i = 0; i < 64; i++)
+//	  {
+//		  max_temps[i] = max_temp;
+//	  }
+//	  send_can2(60, HAL_FDCAN_DLC_BYTES_64, *max_temps);
+
+
+//	  uint8_t set_duty = (max_temp - 20) * 3;
+//	  if(set_duty < 0)
+//	  {
+//		  set_duty = 0;
+//	  }
+//	  else if (set_duty > 99)
+//	  {
+//		  set_duty = 99;
+//	  }
+//
+//	  set_fan_duty(set_duty);
+
+
+
+	  //adc_val2[0] is PA4 is ACCU, [1] is PA5 is TS
+
+	  if (calc_voltage_from_adc(adc_val2[1]) >= (calc_voltage_from_adc(adc_val2[0]) * 0.95) && calc_voltage_from_adc(adc_val2[1]) > 2000)
+	  {
+		  TS_active[0] = 0xFF; //TS is active
+	  }
+	  else
+	  {
+		  TS_active[0] = 0x00; //TS is not active
+	  }
+
+
+	  if (TS_active[0] != prev_TS_active)
+	  {
+		  send_can1(0x90, FDCAN_DLC_BYTES_1, TS_active); //TS is active signal for the TCU RTD
+		  prev_TS_active = TS_active[0];
+	  }
+
+	  //uint8_t can_test[1] = {0xFF};
+	  //send_can1(0x190, FDCAN_DLC_BYTES_1, can_test);
+
+
+	  //FOR CHARGING
+	  //iD = 0x618
+	  //DLC 7
+	  //bits 0-3 1111 = start charging
+
 
 
 //	  if (AMS_OK || fuse_pop)
@@ -566,8 +704,8 @@ int main(void)
 //		  HAL_GPIO_TogglePin(GPIOA, GPIO_PIN_2);
 //
 //	  }
-	  uint8_t Tx_Data[8] = {0, 1, 2, 3, 4, 5, 6, 7};
-	  send_can1(11, FDCAN_DLC_BYTES_8, Tx_Data);
+
+
 
 //	  uint8_t Tx_Data2[12] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11};
 //	  send_can2(10, FDCAN_DLC_BYTES_12, Tx_Data2);
@@ -606,13 +744,14 @@ void SystemClock_Config(void)
   /** Initializes the RCC Oscillators according to the specified parameters
   * in the RCC_OscInitTypeDef structure.
   */
-  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_LSI|RCC_OSCILLATORTYPE_HSE;
-  RCC_OscInitStruct.HSEState = RCC_HSE_ON;
+  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI|RCC_OSCILLATORTYPE_LSI;
+  RCC_OscInitStruct.HSIState = RCC_HSI_ON;
+  RCC_OscInitStruct.HSICalibrationValue = RCC_HSICALIBRATION_DEFAULT;
   RCC_OscInitStruct.LSIState = RCC_LSI_ON;
   RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
-  RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSE;
-  RCC_OscInitStruct.PLL.PLLM = RCC_PLLM_DIV3;
-  RCC_OscInitStruct.PLL.PLLN = 20;
+  RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSI;
+  RCC_OscInitStruct.PLL.PLLM = RCC_PLLM_DIV1;
+  RCC_OscInitStruct.PLL.PLLN = 10;
   RCC_OscInitStruct.PLL.PLLP = RCC_PLLP_DIV2;
   RCC_OscInitStruct.PLL.PLLQ = RCC_PLLQ_DIV2;
   RCC_OscInitStruct.PLL.PLLR = RCC_PLLR_DIV2;
@@ -773,6 +912,32 @@ static void MX_ADC2_Init(void)
 }
 
 /**
+  * @brief CORDIC Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_CORDIC_Init(void)
+{
+
+  /* USER CODE BEGIN CORDIC_Init 0 */
+
+  /* USER CODE END CORDIC_Init 0 */
+
+  /* USER CODE BEGIN CORDIC_Init 1 */
+
+  /* USER CODE END CORDIC_Init 1 */
+  hcordic.Instance = CORDIC;
+  if (HAL_CORDIC_Init(&hcordic) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN CORDIC_Init 2 */
+
+  /* USER CODE END CORDIC_Init 2 */
+
+}
+
+/**
   * @brief FDCAN1 Initialization Function
   * @param None
   * @retval None
@@ -791,17 +956,17 @@ static void MX_FDCAN1_Init(void)
   hfdcan1.Init.ClockDivider = FDCAN_CLOCK_DIV1;
   hfdcan1.Init.FrameFormat = FDCAN_FRAME_CLASSIC;
   hfdcan1.Init.Mode = FDCAN_MODE_NORMAL;
-  hfdcan1.Init.AutoRetransmission = DISABLE;
+  hfdcan1.Init.AutoRetransmission = ENABLE;
   hfdcan1.Init.TransmitPause = DISABLE;
   hfdcan1.Init.ProtocolException = DISABLE;
-  hfdcan1.Init.NominalPrescaler = 2;
-  hfdcan1.Init.NominalSyncJumpWidth = 2;
-  hfdcan1.Init.NominalTimeSeg1 = 31;
-  hfdcan1.Init.NominalTimeSeg2 = 8;
-  hfdcan1.Init.DataPrescaler = 2;
-  hfdcan1.Init.DataSyncJumpWidth = 2;
-  hfdcan1.Init.DataTimeSeg1 = 31;
-  hfdcan1.Init.DataTimeSeg2 = 8;
+  hfdcan1.Init.NominalPrescaler = 10;
+  hfdcan1.Init.NominalSyncJumpWidth = 4;
+  hfdcan1.Init.NominalTimeSeg1 = 11;
+  hfdcan1.Init.NominalTimeSeg2 = 4;
+  hfdcan1.Init.DataPrescaler = 10;
+  hfdcan1.Init.DataSyncJumpWidth = 4;
+  hfdcan1.Init.DataTimeSeg1 = 11;
+  hfdcan1.Init.DataTimeSeg2 = 4;
   hfdcan1.Init.StdFiltersNbr = 1;
   hfdcan1.Init.ExtFiltersNbr = 0;
   hfdcan1.Init.TxFifoQueueMode = FDCAN_TX_FIFO_OPERATION;
@@ -832,20 +997,20 @@ static void MX_FDCAN2_Init(void)
   /* USER CODE END FDCAN2_Init 1 */
   hfdcan2.Instance = FDCAN2;
   hfdcan2.Init.ClockDivider = FDCAN_CLOCK_DIV1;
-  hfdcan2.Init.FrameFormat = FDCAN_FRAME_CLASSIC;
+  hfdcan2.Init.FrameFormat = FDCAN_FRAME_FD_NO_BRS;
   hfdcan2.Init.Mode = FDCAN_MODE_NORMAL;
   hfdcan2.Init.AutoRetransmission = DISABLE;
   hfdcan2.Init.TransmitPause = DISABLE;
   hfdcan2.Init.ProtocolException = DISABLE;
-  hfdcan2.Init.NominalPrescaler = 2;
-  hfdcan2.Init.NominalSyncJumpWidth = 2;
-  hfdcan2.Init.NominalTimeSeg1 = 31;
-  hfdcan2.Init.NominalTimeSeg2 = 8;
-  hfdcan2.Init.DataPrescaler = 2;
-  hfdcan2.Init.DataSyncJumpWidth = 2;
-  hfdcan2.Init.DataTimeSeg1 = 5;
-  hfdcan2.Init.DataTimeSeg2 = 2;
-  hfdcan2.Init.StdFiltersNbr = 1;
+  hfdcan2.Init.NominalPrescaler = 16;
+  hfdcan2.Init.NominalSyncJumpWidth = 1;
+  hfdcan2.Init.NominalTimeSeg1 = 2;
+  hfdcan2.Init.NominalTimeSeg2 = 2;
+  hfdcan2.Init.DataPrescaler = 1;
+  hfdcan2.Init.DataSyncJumpWidth = 1;
+  hfdcan2.Init.DataTimeSeg1 = 1;
+  hfdcan2.Init.DataTimeSeg2 = 1;
+  hfdcan2.Init.StdFiltersNbr = 0;
   hfdcan2.Init.ExtFiltersNbr = 0;
   hfdcan2.Init.TxFifoQueueMode = FDCAN_TX_FIFO_OPERATION;
   if (HAL_FDCAN_Init(&hfdcan2) != HAL_OK)
@@ -855,6 +1020,32 @@ static void MX_FDCAN2_Init(void)
   /* USER CODE BEGIN FDCAN2_Init 2 */
 
   /* USER CODE END FDCAN2_Init 2 */
+
+}
+
+/**
+  * @brief FMAC Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_FMAC_Init(void)
+{
+
+  /* USER CODE BEGIN FMAC_Init 0 */
+
+  /* USER CODE END FMAC_Init 0 */
+
+  /* USER CODE BEGIN FMAC_Init 1 */
+
+  /* USER CODE END FMAC_Init 1 */
+  hfmac.Instance = FMAC;
+  if (HAL_FMAC_Init(&hfmac) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN FMAC_Init 2 */
+
+  /* USER CODE END FMAC_Init 2 */
 
 }
 

@@ -10,9 +10,10 @@ ltc6811.c:188:6:address_write	1
 ltc6811.c:232:6:address_read	3
 ltc6811.c:285:6:extract_voltage_reg	4
 ltc6811.c:303:6:extract_all_voltages	3
-ltc6811.c:328:6:read_all_voltages	2
-ltc6811.c:340:6:generate_i2c	3
-ltc6811.c:374:6:send_comm	2
-ltc6811.c:396:6:broadcast_command_stcomm	1
-ltc6811.c:428:8:calc_temp	1
-ltc6811.c:443:5:read_all_temps	8
+ltc6811.c:329:6:read_all_voltages	2
+ltc6811.c:342:6:generate_i2c	3
+ltc6811.c:376:6:send_comm	2
+ltc6811.c:398:6:broadcast_command_stcomm	1
+ltc6811.c:430:8:calc_temp	1
+ltc6811.c:444:7:replace_temps	3
+ltc6811.c:457:5:read_all_temps	11
