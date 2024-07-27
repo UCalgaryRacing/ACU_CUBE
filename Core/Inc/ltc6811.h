@@ -180,7 +180,7 @@ void send_comm(uint8_t * i2c_message, uint8_t len, int mux_num);
 
 void broadcast_command_stcomm(uint16_t command_code);
 
-double calc_temp(double adc_value);
+float calc_temp(float adc_value);
 
 int read_all_temps(ltc6811 *ltc6811_arr, float *thermistor_temps, uint8_t mux_channels, int slave_num);
 

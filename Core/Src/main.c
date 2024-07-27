@@ -24,6 +24,7 @@
 #include "ltc6811.h"
 #include "global_definitions.h"
 //#include "ucr1.h"
+#include "therm_LUT.h"
 
 #include <inttypes.h>
 #include <stddef.h>
@@ -401,6 +402,19 @@ int check_voltages(float *cell_voltage, int num_cells)
 	return 0;
 }
 
+int check_temps(float *thermistor_temps, int num_thermistors)
+{
+	for (int thermistor = 0; thermistor < num_thermistors; thermistor++)
+	{
+		if (thermistor_temps[thermistor] > 60)
+		{
+			return 1;
+		}
+
+	}
+	return 0;
+}
+
 
 // FDCAN1 Callback
 void HAL_FDCAN_RxFifo0Callback(FDCAN_HandleTypeDef *hfdcan, uint32_t RxFifo0ITs)
@@ -432,6 +446,11 @@ int check_empty_voltages()
 		  }
 	  }
 		  return 0;
+}
+
+int16_t get_temp_from_adc(uint16_t adc_val)
+{
+return thermistor_LUT[adc_val];
 }
 
 
@@ -474,11 +493,11 @@ int main(void)
   MX_SPI3_Init();
   MX_ADC1_Init();
   MX_ADC2_Init();
-  MX_TIM2_Init();
-  MX_TIM15_Init();
-  MX_FDCAN2_Init();
-  MX_CORDIC_Init();
-  MX_FMAC_Init();
+  //MX_TIM2_Init();
+  //MX_TIM15_Init();
+  //MX_FDCAN2_Init();
+  //MX_CORDIC_Init();
+  //MX_FMAC_Init();
   /* USER CODE BEGIN 2 */
 
 
@@ -578,7 +597,6 @@ int main(void)
 
 
 
-
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -606,71 +624,74 @@ int main(void)
 
 
 
-      float sum_voltage = 0;
-      for(int i = 0; i < NUM_OF_CELLS; i++)
-      {
-      update_moving_average(&cell_voltage_ma[i], cell_voltage[i]);
-      sum_voltage += cell_voltage_ma[i];
-      }
-      //float average_voltage = sum_voltage / NUM_OF_CELLS;
-      //send_can1(5, FDCAN_DLC_BYTES_4, &sum_voltage);
-
+//      float sum_voltage = 0;
 //      for(int i = 0; i < NUM_OF_CELLS; i++)
 //      {
-//      if(check_fusable_link(average_voltage, cell_voltage[i]))
-//      {
-//    	  AMS_OK = 1; //OPEN AMS FAULT
-//    	  //fuse_pop = 1;
+//      update_moving_average(&cell_voltage_ma[i], cell_voltage[i]);
+//      sum_voltage += cell_voltage_ma[i];
 //      }
-//      }
+//      //float average_voltage = sum_voltage / NUM_OF_CELLS;
+//      //send_can1(5, FDCAN_DLC_BYTES_4, &sum_voltage);
+//
+////      for(int i = 0; i < NUM_OF_CELLS; i++)
+////      {
+////      if(check_fusable_link(average_voltage, cell_voltage[i]))
+////      {
+////    	  AMS_OK = 1; //OPEN AMS FAULT
+////    	  //fuse_pop = 1;
+////      }
+////      }
+//
+//
+	  read_all_temps2(ltc6811_arr, thermistor_temps, NUM_OF_MUX_CHANNELS, NUM_OF_SLAVES);
 
-
-	  if(read_all_temps(ltc6811_arr, thermistor_temps, NUM_OF_MUX_CHANNELS, NUM_OF_SLAVES)) //0 = no fault, 1 = fault
+	  if(check_temps(thermistor_temps, NUM_OF_THERMISTORS))//0 = no fault, 1 = fault
 	  {
-		  AMS_OK = 1; //AMS FAULT
+		  AMS_OK = 1;
 	  }
 
+//
 	  if(AMS_OK)
 	  {
 		  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_2, GPIO_PIN_RESET);
 	  }
-//	  else
+////	  else
+////	  {
+////		  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_2, GPIO_PIN_SET);
+////	  }
+//	  max_temp = thermistor_temps[0];
+//	  for(int thermistor = 0; thermistor < NUM_OF_THERMISTORS; thermistor++)
 //	  {
-//		  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_2, GPIO_PIN_SET);
+//		  if (thermistor_temps[thermistor] > max_temp)
+//		  {
+//			  max_temp = thermistor_temps[thermistor];
+//		  }
 //	  }
-	  max_temp = thermistor_temps[0];
-	  for(int thermistor = 0; thermistor < NUM_OF_THERMISTORS; thermistor++)
-	  {
-		  if (thermistor_temps[thermistor] > max_temp)
-		  {
-			  max_temp = thermistor_temps[thermistor];
-		  }
-	  }
-//	  float[64] max_temps;
-//	  for (int i = 0; i < 64; i++)
-//	  {
-//		  max_temps[i] = max_temp;
-//	  }
-//	  send_can2(60, HAL_FDCAN_DLC_BYTES_64, *max_temps);
-
-
-//	  uint8_t set_duty = (max_temp - 20) * 3;
-//	  if(set_duty < 0)
-//	  {
-//		  set_duty = 0;
-//	  }
-//	  else if (set_duty > 99)
-//	  {
-//		  set_duty = 99;
-//	  }
+////	  float[64] max_temps;
+////	  for (int i = 0; i < 64; i++)
+////	  {
+////		  max_temps[i] = max_temp;
+////	  }
+////	  send_can2(60, HAL_FDCAN_DLC_BYTES_64, *max_temps);
 //
-//	  set_fan_duty(set_duty);
-
-
-
+//
+////	  uint8_t set_duty = (max_temp - 20) * 3;
+////	  if(set_duty < 0)
+////	  {
+////		  set_duty = 0;
+////	  }
+////	  else if (set_duty > 99)
+////	  {
+////		  set_duty = 99;
+////	  }
+////
+////	  set_fan_duty(set_duty);
+//
+//
+//
 	  //adc_val2[0] is PA4 is ACCU, [1] is PA5 is TS
 
-	  if (calc_voltage_from_adc(adc_val2[1]) >= (calc_voltage_from_adc(adc_val2[0]) * 0.95) && calc_voltage_from_adc(adc_val2[1]) > 2000)
+	  if (calc_voltage_from_adc(adc_val2[1]) >= (calc_voltage_from_adc(adc_val2[0]) * 0.95) && calc_voltage_from_adc(adc_val2[1]) > 1000)
 	  {
 		  TS_active[0] = 0xFF; //TS is active
 	  }
@@ -678,8 +699,8 @@ int main(void)
 	  {
 		  TS_active[0] = 0x00; //TS is not active
 	  }
-
-
+//
+//
 	  if (TS_active[0] != prev_TS_active)
 	  {
 		  send_can1(0x90, FDCAN_DLC_BYTES_1, TS_active); //TS is active signal for the TCU RTD
@@ -711,7 +732,7 @@ int main(void)
 //	  send_can2(10, FDCAN_DLC_BYTES_12, Tx_Data2);
 
 
-	  update_SOC();
+	 // update_SOC();
 
 //	  input_percentage = calc_voltage_from_adc(adc_val2[1]) / 2900;
 //	  set_fan_duty(input_percentage * 100);
